@@ -543,9 +543,12 @@ class TabelaDinamicaFrame(tk.Frame):
 
         self.result_tree = ttk.Treeview(res_frame, show="tree headings",
                                         style="Pivot.Treeview", selectmode="browse")
-        self.result_tree.tag_configure("grupo",   font=("Segoe UI", 9, "bold"), background="#dce8f5")
-        self.result_tree.tag_configure("total",   font=("Segoe UI", 9, "bold"), background="#c8e6c9")
-        self.result_tree.tag_configure("subitem", font=("Segoe UI", 9))
+        self.result_tree.tag_configure("grupo_neg",   font=("Segoe UI", 9, "bold"), background="#dce8f5", foreground="#c62828")
+        self.result_tree.tag_configure("grupo_pos",   font=("Segoe UI", 9, "bold"), background="#dce8f5", foreground="#1b5e20")
+        self.result_tree.tag_configure("total_neg",   font=("Segoe UI", 9, "bold"), background="#c8e6c9", foreground="#c62828")
+        self.result_tree.tag_configure("total_pos",   font=("Segoe UI", 9, "bold"), background="#c8e6c9", foreground="#1b5e20")
+        self.result_tree.tag_configure("sub_neg",     font=("Segoe UI", 9),         foreground="#c62828")
+        self.result_tree.tag_configure("sub_pos",     font=("Segoe UI", 9),         foreground="#1b5e20")
 
         vsb = ttk.Scrollbar(res_frame, orient="vertical",   command=self.result_tree.yview)
         hsb = ttk.Scrollbar(res_frame, orient="horizontal", command=self.result_tree.xview)
@@ -679,24 +682,28 @@ class TabelaDinamicaFrame(tk.Frame):
         grand_totals = {str(cv): 0.0 for cv in col_vals}
 
         grupos = sorted(df[row1].dropna().unique().tolist())
+        def tag_grupo(total):
+            return ("grupo_neg",) if total < 0 else ("grupo_pos",)
+
+        def tag_sub(total):
+            return ("sub_neg",) if total < 0 else ("sub_pos",)
+
         for g in grupos:
             g_df       = df[df[row1] == g]
             g_col_vals = vals_por_col(g_df)
             g_total    = soma_dict(g_col_vals)
 
-            # acumular grand total (somente sum/count fazem sentido; mean acumula separado)
             for k in grand_totals:
                 grand_totals[k] += g_col_vals.get(k, 0.0)
 
-            # valores formatados para o nó de grupo (= subtotal da categoria)
             g_vals_fmt = [self._fmt(g_col_vals.get(str(cv), 0)) for cv in col_vals] + \
                          [self._fmt(g_total)]
 
             safe_iid = f"g_{g}"
             if use_row2:
-                # nó pai: fechado por padrão, mostra subtotais
                 self.result_tree.insert("", "end", iid=safe_iid, text=g,
-                                        values=g_vals_fmt, open=False, tags=("grupo",))
+                                        values=g_vals_fmt, open=False,
+                                        tags=tag_grupo(g_total))
                 export_rows.append([g] + g_vals_fmt)
 
                 subgrupos = sorted(g_df[row2].dropna().unique().tolist())
@@ -707,19 +714,20 @@ class TabelaDinamicaFrame(tk.Frame):
                     sg_fmt = [self._fmt(sg_cv.get(str(cv), 0)) for cv in col_vals] + \
                              [self._fmt(sg_tot)]
                     self.result_tree.insert(safe_iid, "end", text=sg,
-                                            values=sg_fmt, tags=("subitem",))
+                                            values=sg_fmt, tags=tag_sub(sg_tot))
                     export_rows.append(["  " + sg] + sg_fmt)
             else:
                 self.result_tree.insert("", "end", iid=safe_iid, text=g,
-                                        values=g_vals_fmt, tags=("grupo",))
+                                        values=g_vals_fmt, tags=tag_grupo(g_total))
                 export_rows.append([g] + g_vals_fmt)
 
         if total_g:
             gt_total    = soma_dict(grand_totals)
             gt_vals_fmt = [self._fmt(grand_totals.get(str(cv), 0)) for cv in col_vals] + \
                           [self._fmt(gt_total)]
+            gt_tag = ("total_neg",) if gt_total < 0 else ("total_pos",)
             self.result_tree.insert("", "end", text="Total Geral",
-                                    values=gt_vals_fmt, tags=("total",))
+                                    values=gt_vals_fmt, tags=gt_tag)
             export_rows.append(["Total Geral"] + gt_vals_fmt)
 
         self._export_data = export_rows

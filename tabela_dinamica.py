@@ -1,8 +1,8 @@
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import sqlite3
+import sys
 import os
+import sqlite3
 import datetime
+import re
 
 try:
     import pandas as pd
@@ -16,34 +16,58 @@ try:
 except ImportError:
     OPENPYXL_OK = False
 
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QTabWidget,
+    QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
+    QLabel, QLineEdit, QPushButton, QComboBox, QCheckBox,
+    QRadioButton, QButtonGroup, QGroupBox, QFileDialog,
+    QMessageBox, QTableWidget, QTableWidgetItem,
+    QTreeWidget, QTreeWidgetItem, QHeaderView, QSplitter,
+    QAbstractItemView, QStatusBar, QFrame,
+)
+from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtGui import QColor, QBrush, QFont, QPalette
+
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dados.db")
 
-CAMPOS = ["Data", "Categoria", "Sub_Categoria", "Transacao", "Descricao", "Valor"]
+NOMES_MESES = {
+    1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+    5: "Maio",    6: "Junho",     7: "Julho", 8: "Agosto",
+    9: "Setembro",10: "Outubro",  11: "Novembro", 12: "Dezembro",
+}
+
+COLOR_NEG   = QColor("#c62828")   # vermelho escuro
+COLOR_POS   = QColor("#1b5e20")   # verde escuro
+COLOR_ZERO  = QColor("#424242")   # cinza
+BG_GRUPO    = QColor("#dce8f5")   # azul claro
+BG_TOTAL    = QColor("#c8e6c9")   # verde claro
+BG_ALT      = QColor("#f9f9f9")   # alternado
 
 
-# ─────────────────────────── DB ────────────────────────────
+# ═══════════════════════════════════════════════════════════
+#  BANCO DE DADOS
+# ═══════════════════════════════════════════════════════════
 
 def init_db():
     con = sqlite3.connect(DB_PATH)
-    cur = con.cursor()
-    cur.execute("""
+    con.execute("""
         CREATE TABLE IF NOT EXISTS registros (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            Data        TEXT,
-            Mes         INTEGER,
-            Ano         INTEGER,
-            Categoria   TEXT,
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            Data          TEXT,
+            Mes           INTEGER,
+            Ano           INTEGER,
+            Categoria     TEXT,
             Sub_Categoria TEXT,
-            Transacao   TEXT,
-            Descricao   TEXT,
-            Valor       REAL
+            Transacao     TEXT,
+            Descricao     TEXT,
+            Valor         REAL
         )
     """)
     con.commit()
     con.close()
 
 
-def _mes_ano(data_str):
+def _mes_ano(data_str: str):
     for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
                 "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
@@ -54,16 +78,30 @@ def _mes_ano(data_str):
     return None, None
 
 
+def _parse_valor(raw) -> float:
+    s = re.sub(r"[R$\s]", "", str(raw).strip())
+    if "," in s and "." in s:
+        if s.rindex(",") > s.rindex("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    else:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
 def inserir(row: dict):
     mes, ano = _mes_ano(row.get("Data", ""))
     con = sqlite3.connect(DB_PATH)
-    con.execute("""
-        INSERT INTO registros (Data, Mes, Ano, Categoria, Sub_Categoria, Transacao, Descricao, Valor)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (row["Data"], mes, ano,
-          row["Categoria"], row["Sub_Categoria"],
-          row["Transacao"], row["Descricao"],
-          float(row["Valor"] or 0)))
+    con.execute(
+        "INSERT INTO registros (Data,Mes,Ano,Categoria,Sub_Categoria,Transacao,Descricao,Valor)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        (row["Data"], mes, ano, row["Categoria"], row["Sub_Categoria"],
+         row["Transacao"], row["Descricao"], float(row["Valor"] or 0))
+    )
     con.commit()
     con.close()
 
@@ -71,13 +109,12 @@ def inserir(row: dict):
 def atualizar(rid, row: dict):
     mes, ano = _mes_ano(row.get("Data", ""))
     con = sqlite3.connect(DB_PATH)
-    con.execute("""
-        UPDATE registros SET Data=?, Mes=?, Ano=?, Categoria=?, Sub_Categoria=?,
-            Transacao=?, Descricao=?, Valor=? WHERE id=?
-    """, (row["Data"], mes, ano,
-          row["Categoria"], row["Sub_Categoria"],
-          row["Transacao"], row["Descricao"],
-          float(row["Valor"] or 0), rid))
+    con.execute(
+        "UPDATE registros SET Data=?,Mes=?,Ano=?,Categoria=?,Sub_Categoria=?,"
+        "Transacao=?,Descricao=?,Valor=? WHERE id=?",
+        (row["Data"], mes, ano, row["Categoria"], row["Sub_Categoria"],
+         row["Transacao"], row["Descricao"], float(row["Valor"] or 0), rid)
+    )
     con.commit()
     con.close()
 
@@ -105,35 +142,14 @@ def apagar_banco():
     con.close()
 
 
-def _parse_valor(raw) -> float:
-    """Converte strings como '-R$ 55,48' ou '1.234,56' para float."""
-    import re
-    s = str(raw).strip()
-    s = re.sub(r"[R$\s]", "", s)   # remove R$, espaços
-    # detecta formato BR (último separador é vírgula): 1.234,56
-    if "," in s and "." in s:
-        if s.rindex(",") > s.rindex("."):   # BR: 1.234,56
-            s = s.replace(".", "").replace(",", ".")
-        else:                               # EN: 1,234.56
-            s = s.replace(",", "")
-    else:
-        s = s.replace(",", ".")
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
-
-
-def importar_df(df: "pd.DataFrame", modo: str):
+def importar_df(df, modo: str):
     col_map = {c.lower().strip(): c for c in df.columns}
 
     def get(*names):
-        """Retorna o nome original da coluna para qualquer alias."""
         for name in names:
             key = name.lower().strip()
             if key in col_map:
                 return col_map[key]
-        # busca parcial: coluna que começa com o primeiro nome
         prefix = names[0].lower().strip()
         for k, v in col_map.items():
             if k.startswith(prefix):
@@ -155,239 +171,289 @@ def importar_df(df: "pd.DataFrame", modo: str):
         data_val = str(r[col_data]).strip() if col_data else ""
         mes, ano = _mes_ano(data_val)
         valor    = _parse_valor(r[col_valor]) if col_valor else 0.0
-        con.execute("""
-            INSERT INTO registros (Data, Mes, Ano, Categoria, Sub_Categoria, Transacao, Descricao, Valor)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            data_val, mes, ano,
-            str(r[col_cat])  if col_cat  else "",
-            str(r[col_sub])  if col_sub  else "",
-            str(r[col_tran]) if col_tran else "",
-            str(r[col_desc]) if col_desc else "",
-            valor,
-        ))
+        con.execute(
+            "INSERT INTO registros (Data,Mes,Ano,Categoria,Sub_Categoria,Transacao,Descricao,Valor)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (data_val, mes, ano,
+             str(r[col_cat])  if col_cat  else "",
+             str(r[col_sub])  if col_sub  else "",
+             str(r[col_tran]) if col_tran else "",
+             str(r[col_desc]) if col_desc else "",
+             valor)
+        )
     con.commit()
     con.close()
 
 
-# ─────────────────────────── FORMULÁRIO ────────────────────
+# ═══════════════════════════════════════════════════════════
+#  HELPERS VISUAIS
+# ═══════════════════════════════════════════════════════════
 
-class FormularioFrame(tk.Frame):
-    def __init__(self, parent, app):
-        super().__init__(parent, bg="#f5f5f5")
-        self.app = app
+def fmt_valor(v) -> str:
+    if not isinstance(v, (int, float)):
+        return str(v)
+    s = f"R$ {abs(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"-{s}" if v < 0 else s
+
+
+def cor_valor(v) -> QColor:
+    try:
+        f = float(v) if not isinstance(v, float) else v
+        if f < 0:   return COLOR_NEG
+        if f > 0:   return COLOR_POS
+        return COLOR_ZERO
+    except (ValueError, TypeError):
+        return COLOR_ZERO
+
+
+def item_valor(v) -> QTableWidgetItem:
+    it = QTableWidgetItem(fmt_valor(v))
+    it.setForeground(QBrush(cor_valor(v)))
+    it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    return it
+
+
+# ═══════════════════════════════════════════════════════════
+#  ABA DADOS
+# ═══════════════════════════════════════════════════════════
+
+class AbaForm(QWidget):
+    def __init__(self):
+        super().__init__()
         self._edit_id = None
         self._build()
 
     def _build(self):
-        tk.Label(self, text="Entrada de Dados", font=("Segoe UI", 14, "bold"),
-                 bg="#f5f5f5").grid(row=0, column=0, columnspan=2, pady=(12, 6))
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 8)
 
-        labels = ["Data (dd/mm/aaaa hh:mm:ss)", "Categoria", "Sub-Categoria",
-                  "Transação", "Descrição", "Valor"]
-        self._vars = []
-        for i, lbl in enumerate(labels):
-            tk.Label(self, text=lbl, bg="#f5f5f5",
-                     font=("Segoe UI", 10)).grid(row=i+1, column=0, sticky="e", padx=8, pady=4)
-            v = tk.StringVar()
-            entry = tk.Entry(self, textvariable=v, width=36, font=("Segoe UI", 10))
-            entry.grid(row=i+1, column=1, padx=8, pady=4, sticky="w")
-            self._vars.append(v)
+        # ── formulário ────────────────────────────────────
+        grp = QGroupBox("Registro")
+        grp.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        form = QFormLayout(grp)
+        form.setLabelAlignment(Qt.AlignRight)
+        form.setSpacing(8)
 
-        btn_frame = tk.Frame(self, bg="#f5f5f5")
-        btn_frame.grid(row=8, column=0, columnspan=2, pady=10)
-        tk.Button(btn_frame, text="Salvar", width=12, command=self._salvar,
-                  bg="#4CAF50", fg="white", font=("Segoe UI", 10, "bold")).pack(side="left", padx=4)
-        tk.Button(btn_frame, text="Limpar", width=12, command=self._limpar,
-                  bg="#2196F3", fg="white", font=("Segoe UI", 10)).pack(side="left", padx=4)
-        tk.Button(btn_frame, text="Excluir Selecionado", width=16, command=self._excluir,
-                  bg="#f44336", fg="white", font=("Segoe UI", 10)).pack(side="left", padx=4)
+        self._campos = {}
+        specs = [
+            ("Data",          "Data  (dd/mm/aaaa  ou  dd/mm/aaaa hh:mm:ss)"),
+            ("Categoria",     "Categoria"),
+            ("Sub_Categoria", "Sub-Categoria"),
+            ("Transacao",     "Transação"),
+            ("Descricao",     "Descrição"),
+            ("Valor",         "Valor"),
+        ]
+        for key, lbl in specs:
+            ed = QLineEdit()
+            ed.setFixedHeight(28)
+            form.addRow(lbl + ":", ed)
+            self._campos[key] = ed
 
-        # tabela de registros
-        frame_tree = tk.Frame(self)
-        frame_tree.grid(row=9, column=0, columnspan=2, sticky="nsew", padx=8, pady=4)
-        self.rowconfigure(9, weight=1)
-        self.columnconfigure(1, weight=1)
+        # botões
+        btn_row = QHBoxLayout()
+        self._btn_salvar = QPushButton("Salvar")
+        self._btn_salvar.setFixedHeight(32)
+        self._btn_salvar.setStyleSheet("background:#4CAF50;color:white;font-weight:bold;border-radius:4px")
+        self._btn_salvar.clicked.connect(self._salvar)
 
-        cols = ("id", "Data", "Mes", "Ano", "Categoria", "Sub_Categoria",
-                "Transacao", "Descricao", "Valor")
-        self.tree = ttk.Treeview(frame_tree, columns=cols, show="headings", height=14)
-        widths = [40, 140, 40, 50, 100, 110, 110, 150, 80]
-        for col, w in zip(cols, widths):
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=w, anchor="center")
-        vsb = ttk.Scrollbar(frame_tree, orient="vertical", command=self.tree.yview)
-        hsb = ttk.Scrollbar(frame_tree, orient="horizontal", command=self.tree.xview)
-        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        hsb.grid(row=1, column=0, sticky="ew")
-        frame_tree.rowconfigure(0, weight=1)
-        frame_tree.columnconfigure(0, weight=1)
-        self.tree.bind("<<TreeviewSelect>>", self._on_select)
-        self._carregar_tree()
+        self._btn_limpar = QPushButton("Limpar")
+        self._btn_limpar.setFixedHeight(32)
+        self._btn_limpar.setStyleSheet("background:#2196F3;color:white;border-radius:4px")
+        self._btn_limpar.clicked.connect(self._limpar)
 
-    def _campos(self):
-        return {
-            "Data": self._vars[0].get(),
-            "Categoria": self._vars[1].get(),
-            "Sub_Categoria": self._vars[2].get(),
-            "Transacao": self._vars[3].get(),
-            "Descricao": self._vars[4].get(),
-            "Valor": self._vars[5].get(),
-        }
+        self._btn_excluir = QPushButton("Excluir Selecionado")
+        self._btn_excluir.setFixedHeight(32)
+        self._btn_excluir.setStyleSheet("background:#f44336;color:white;border-radius:4px")
+        self._btn_excluir.clicked.connect(self._excluir)
+
+        btn_row.addWidget(self._btn_salvar)
+        btn_row.addWidget(self._btn_limpar)
+        btn_row.addWidget(self._btn_excluir)
+        btn_row.addStretch()
+        form.addRow(btn_row)
+        root.addWidget(grp)
+
+        # ── tabela de registros ───────────────────────────
+        COLS = ["id", "Data", "Mês", "Ano", "Categoria", "Sub-Cat.",
+                "Transação", "Descrição", "Valor"]
+        self._table = QTableWidget(0, len(COLS))
+        self._table.setHorizontalHeaderLabels(COLS)
+        self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._table.setAlternatingRowColors(True)
+        self._table.verticalHeader().setVisible(False)
+        self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self._table.horizontalHeader().setStretchLastSection(True)
+        self._table.setColumnWidth(0, 40)
+        self._table.setColumnWidth(1, 130)
+        self._table.setColumnWidth(2, 40)
+        self._table.setColumnWidth(3, 50)
+        self._table.setColumnWidth(4, 110)
+        self._table.setColumnWidth(5, 100)
+        self._table.setColumnWidth(6, 140)
+        self._table.setColumnWidth(7, 160)
+        self._table.itemSelectionChanged.connect(self._on_select)
+        root.addWidget(self._table, 1)
+
+        self._status = QLabel("")
+        root.addWidget(self._status)
+        self._carregar()
+
+    # ── ações ─────────────────────────────────────────────
+    def _dados(self):
+        return {k: w.text().strip() for k, w in self._campos.items()}
 
     def _salvar(self):
-        row = self._campos()
+        row = self._dados()
         if not row["Data"]:
-            messagebox.showwarning("Atenção", "Data é obrigatória.")
+            QMessageBox.warning(self, "Atenção", "Data é obrigatória.")
             return
         mes, ano = _mes_ano(row["Data"])
         if mes is None:
-            messagebox.showwarning("Atenção", "Formato de data inválido.\nUse dd/mm/aaaa ou dd/mm/aaaa hh:mm:ss")
+            QMessageBox.warning(self, "Atenção",
+                "Formato de data inválido.\nUse dd/mm/aaaa ou dd/mm/aaaa hh:mm:ss")
             return
         try:
             float(row["Valor"] or 0)
         except ValueError:
-            messagebox.showwarning("Atenção", "Valor deve ser numérico.")
+            QMessageBox.warning(self, "Atenção", "Valor deve ser numérico.")
             return
         if self._edit_id:
             atualizar(self._edit_id, row)
         else:
             inserir(row)
         self._limpar()
-        self._carregar_tree()
+        self._carregar()
 
     def _limpar(self):
-        for v in self._vars:
-            v.set("")
+        for w in self._campos.values():
+            w.clear()
         self._edit_id = None
+        self._btn_salvar.setText("Salvar")
 
     def _excluir(self):
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo("Info", "Selecione um registro para excluir.")
+        rows = self._table.selectionModel().selectedRows()
+        if not rows:
+            QMessageBox.information(self, "Info", "Selecione um registro para excluir.")
             return
-        if messagebox.askyesno("Confirmar", "Excluir registro selecionado?"):
-            rid = self.tree.item(sel[0])["values"][0]
+        if QMessageBox.question(self, "Confirmar", "Excluir registro selecionado?",
+                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            rid = int(self._table.item(rows[0].row(), 0).text())
             deletar(rid)
             self._limpar()
-            self._carregar_tree()
+            self._carregar()
 
-    def _on_select(self, _event):
-        sel = self.tree.selection()
-        if not sel:
+    def _on_select(self):
+        rows = self._table.selectionModel().selectedRows()
+        if not rows:
             return
-        vals = self.tree.item(sel[0])["values"]
-        # id, Data, Mes, Ano, Categoria, Sub_Categoria, Transacao, Descricao, Valor
-        self._edit_id = vals[0]
-        self._vars[0].set(vals[1])
-        self._vars[1].set(vals[4])
-        self._vars[2].set(vals[5])
-        self._vars[3].set(vals[6])
-        self._vars[4].set(vals[7])
-        self._vars[5].set(vals[8])
+        r = rows[0].row()
+        self._edit_id = int(self._table.item(r, 0).text())
+        self._campos["Data"].setText(self._table.item(r, 1).text())
+        self._campos["Categoria"].setText(self._table.item(r, 4).text())
+        self._campos["Sub_Categoria"].setText(self._table.item(r, 5).text())
+        self._campos["Transacao"].setText(self._table.item(r, 6).text())
+        self._campos["Descricao"].setText(self._table.item(r, 7).text())
+        self._campos["Valor"].setText(
+            str(self._table.item(r, 8).data(Qt.UserRole) or ""))
+        self._btn_salvar.setText("Atualizar")
 
-    def _carregar_tree(self):
-        for i in self.tree.get_children():
-            self.tree.delete(i)
-        _, rows = buscar_todos()
-        for r in rows:
-            self.tree.insert("", "end", values=r)
+    def _carregar(self):
+        cols, rows = buscar_todos()
+        self._table.setRowCount(0)
+        for i, r in enumerate(rows):
+            self._table.insertRow(i)
+            for j, v in enumerate(r):
+                if j == 8:   # Valor
+                    it = item_valor(v)
+                    it.setData(Qt.UserRole, v)
+                else:
+                    it = QTableWidgetItem(str(v) if v is not None else "")
+                    it.setTextAlignment(Qt.AlignCenter)
+                self._table.setItem(i, j, it)
+        self._status.setText(f"{len(rows)} registros")
 
     def refresh(self):
-        self._carregar_tree()
+        self._carregar()
 
 
-# ─────────────────────────── IMPORTAÇÃO ────────────────────
+# ═══════════════════════════════════════════════════════════
+#  ABA IMPORTAÇÃO
+# ═══════════════════════════════════════════════════════════
 
-class ImportacaoFrame(tk.Frame):
-    def __init__(self, parent, app):
-        super().__init__(parent, bg="#f5f5f5")
-        self.app = app
+class AbaImport(QWidget):
+    def __init__(self, aba_form: AbaForm):
+        super().__init__()
+        self._aba_form = aba_form
         self._build()
 
     def _build(self):
-        tk.Label(self, text="Importar Arquivo", font=("Segoe UI", 14, "bold"),
-                 bg="#f5f5f5").pack(pady=12)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 8)
 
         if not PANDAS_OK:
-            tk.Label(self, text="pandas não instalado.\nExecute: pip install pandas openpyxl xlrd",
-                     fg="red", bg="#f5f5f5", font=("Segoe UI", 11)).pack(pady=20)
+            root.addWidget(QLabel(
+                "pandas não instalado.\nExecute: pip install pandas openpyxl xlrd"))
             return
 
-        frm = tk.Frame(self, bg="#f5f5f5")
-        frm.pack(pady=6)
-        tk.Label(frm, text="Arquivo:", bg="#f5f5f5",
-                 font=("Segoe UI", 10)).grid(row=0, column=0, sticky="e", padx=6)
-        self._path_var = tk.StringVar()
-        tk.Entry(frm, textvariable=self._path_var, width=48,
-                 font=("Segoe UI", 10)).grid(row=0, column=1, padx=4)
-        tk.Button(frm, text="...", width=3, command=self._browse).grid(row=0, column=2, padx=4)
+        # arquivo
+        grp_arq = QGroupBox("Arquivo")
+        lay_arq = QGridLayout(grp_arq)
+        lay_arq.addWidget(QLabel("Arquivo:"), 0, 0)
+        self._path = QLineEdit(); self._path.setReadOnly(True)
+        lay_arq.addWidget(self._path, 0, 1)
+        btn_browse = QPushButton("...")
+        btn_browse.setFixedWidth(36)
+        btn_browse.clicked.connect(self._browse)
+        lay_arq.addWidget(btn_browse, 0, 2)
+        lay_arq.addWidget(QLabel("Separador CSV:"), 1, 0)
+        self._sep = QLineEdit(";"); self._sep.setFixedWidth(40)
+        lay_arq.addWidget(self._sep, 1, 1, Qt.AlignLeft)
+        root.addWidget(grp_arq)
 
-        tk.Label(frm, text="Separador CSV:", bg="#f5f5f5",
-                 font=("Segoe UI", 10)).grid(row=1, column=0, sticky="e", padx=6, pady=6)
-        self._sep_var = tk.StringVar(value=";")
-        tk.Entry(frm, textvariable=self._sep_var, width=4,
-                 font=("Segoe UI", 10)).grid(row=1, column=1, sticky="w", padx=4)
+        # modo
+        grp_modo = QGroupBox("Modo de Importação")
+        lay_modo = QVBoxLayout(grp_modo)
+        self._rb_add = QRadioButton("Acrescentar ao banco existente")
+        self._rb_ow  = QRadioButton("Sobrescrever banco (apaga tudo antes)")
+        self._rb_ow.setStyleSheet("color:#c62828")
+        self._rb_add.setChecked(True)
+        lay_modo.addWidget(self._rb_add)
+        lay_modo.addWidget(self._rb_ow)
+        root.addWidget(grp_modo)
 
-        self._modo = tk.StringVar(value="acrescentar")
-        tk.Label(self, text="Modo de importação:", bg="#f5f5f5",
-                 font=("Segoe UI", 10, "bold")).pack()
-        rb_frame = tk.Frame(self, bg="#f5f5f5")
-        rb_frame.pack()
-        tk.Radiobutton(rb_frame, text="Acrescentar ao banco existente",
-                       variable=self._modo, value="acrescentar",
-                       bg="#f5f5f5", font=("Segoe UI", 10)).pack(anchor="w")
-        tk.Radiobutton(rb_frame, text="Sobrescrever banco (apaga tudo antes)",
-                       variable=self._modo, value="sobrescrever",
-                       bg="#f5f5f5", font=("Segoe UI", 10),
-                       fg="#c62828").pack(anchor="w")
+        # botão
+        btn_imp = QPushButton("Importar")
+        btn_imp.setFixedHeight(36)
+        btn_imp.setStyleSheet("background:#4CAF50;color:white;font-weight:bold;font-size:13px;border-radius:4px")
+        btn_imp.clicked.connect(self._importar)
+        root.addWidget(btn_imp)
 
-        tk.Button(self, text="Importar", width=16, command=self._importar,
-                  bg="#4CAF50", fg="white", font=("Segoe UI", 11, "bold")).pack(pady=14)
-
-        self._status = tk.Label(self, text="", bg="#f5f5f5", font=("Segoe UI", 10))
-        self._status.pack()
+        self._status = QLabel("")
+        root.addWidget(self._status)
 
         # preview
-        prev_frame = tk.Frame(self)
-        prev_frame.pack(fill="both", expand=True, padx=8, pady=4)
-        self._preview = ttk.Treeview(prev_frame, show="headings", height=10)
-        vsb = ttk.Scrollbar(prev_frame, orient="vertical", command=self._preview.yview)
-        hsb = ttk.Scrollbar(prev_frame, orient="horizontal", command=self._preview.xview)
-        self._preview.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-        self._preview.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        hsb.grid(row=1, column=0, sticky="ew")
-        prev_frame.rowconfigure(0, weight=1)
-        prev_frame.columnconfigure(0, weight=1)
+        grp_prev = QGroupBox("Pré-visualização (20 primeiras linhas)")
+        lay_prev = QVBoxLayout(grp_prev)
+        self._preview = QTableWidget(0, 0)
+        self._preview.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._preview.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self._preview.verticalHeader().setVisible(False)
+        lay_prev.addWidget(self._preview)
+        root.addWidget(grp_prev, 1)
 
     def _browse(self):
-        path = filedialog.askopenfilename(
-            filetypes=[("Planilhas", "*.csv *.xls *.xlsx"), ("Todos", "*.*")])
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Selecionar arquivo", "",
+            "Planilhas (*.csv *.xls *.xlsx);;Todos (*.*)")
         if path:
-            self._path_var.set(path)
+            self._path.setText(path)
             self._load_preview(path)
-
-    def _load_preview(self, path):
-        try:
-            df = self._ler(path)
-            self._preview["columns"] = list(df.columns)
-            for col in df.columns:
-                self._preview.heading(col, text=col)
-                self._preview.column(col, width=100)
-            for i in self._preview.get_children():
-                self._preview.delete(i)
-            for _, row in df.head(20).iterrows():
-                self._preview.insert("", "end", values=list(row))
-        except Exception as e:
-            self._status.config(text=f"Erro ao pré-visualizar: {e}", fg="red")
 
     def _ler(self, path):
         ext = os.path.splitext(path)[1].lower()
         if ext == ".csv":
-            sep = self._sep_var.get() or ";"
+            sep = self._sep.text() or ";"
             try:
                 return pd.read_csv(path, sep=sep, encoding="utf-8-sig", dtype=str)
             except UnicodeDecodeError:
@@ -396,172 +462,166 @@ class ImportacaoFrame(tk.Frame):
             return pd.read_excel(path, dtype=str, engine="openpyxl")
         elif ext == ".xls":
             return pd.read_excel(path, dtype=str, engine="xlrd")
-        else:
-            raise ValueError(f"Formato não suportado: {ext}")
+        raise ValueError(f"Formato não suportado: {ext}")
+
+    def _load_preview(self, path):
+        try:
+            df = self._ler(path)
+            self._preview.clear()
+            self._preview.setColumnCount(len(df.columns))
+            self._preview.setHorizontalHeaderLabels(list(df.columns))
+            self._preview.setRowCount(min(20, len(df)))
+            for i, (_, row) in enumerate(df.head(20).iterrows()):
+                for j, v in enumerate(row):
+                    it = QTableWidgetItem(str(v))
+                    self._preview.setItem(i, j, it)
+            self._status.setText(f"{len(df)} linhas encontradas.")
+            self._status.setStyleSheet("color:#1b5e20")
+        except Exception as e:
+            self._status.setText(f"Erro: {e}")
+            self._status.setStyleSheet("color:#c62828")
 
     def _importar(self):
-        path = self._path_var.get().strip()
+        path = self._path.text().strip()
         if not path:
-            messagebox.showwarning("Atenção", "Selecione um arquivo primeiro.")
+            QMessageBox.warning(self, "Atenção", "Selecione um arquivo primeiro.")
             return
-        modo = self._modo.get()
+        modo = "sobrescrever" if self._rb_ow.isChecked() else "acrescentar"
         if modo == "sobrescrever":
-            if not messagebox.askyesno("Confirmar", "Isso apagará TODOS os registros existentes. Continuar?"):
+            if QMessageBox.question(self, "Confirmar",
+                    "Isso apagará TODOS os registros existentes. Continuar?",
+                    QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
                 return
         try:
             df = self._ler(path)
             importar_df(df, modo)
-            self._status.config(text=f"{len(df)} registros importados com sucesso.", fg="#2e7d32")
-            self.app.formulario.refresh()
+            self._status.setText(f"{len(df)} registros importados com sucesso.")
+            self._status.setStyleSheet("color:#1b5e20")
+            self._aba_form.refresh()
         except Exception as e:
-            self._status.config(text=f"Erro: {e}", fg="red")
+            self._status.setText(f"Erro: {e}")
+            self._status.setStyleSheet("color:#c62828")
 
 
-# ─────────────────────────── TABELA DINÂMICA ───────────────
+# ═══════════════════════════════════════════════════════════
+#  ABA TABELA DINÂMICA
+# ═══════════════════════════════════════════════════════════
 
-NOMES_MESES = {1:"Janeiro",2:"Fevereiro",3:"Março",4:"Abril",5:"Maio",6:"Junho",
-               7:"Julho",8:"Agosto",9:"Setembro",10:"Outubro",11:"Novembro",12:"Dezembro"}
+ALL_DIM = ["Ano", "Mes", "Categoria", "Sub_Categoria", "Transacao", "Descricao"]
 
-class TabelaDinamicaFrame(tk.Frame):
-    def __init__(self, parent, app):
-        super().__init__(parent, bg="#f5f5f5")
-        self.app = app
-        self._df = None
-        self._export_data = None   # lista de listas para exportar
-        self._export_cols = []
+class AbaPivot(QWidget):
+    def __init__(self):
+        super().__init__()
+        self._export_rows = []
         self._build()
 
-    # ── construção da UI ──────────────────────────────────────
     def _build(self):
-        tk.Label(self, text="Tabela Dinâmica", font=("Segoe UI", 14, "bold"),
-                 bg="#f5f5f5").grid(row=0, column=0, columnspan=6, pady=(10, 4))
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 8, 12, 8)
+        root.setSpacing(6)
 
-        if not PANDAS_OK:
-            tk.Label(self, text="pandas não instalado.", fg="red",
-                     bg="#f5f5f5").grid(row=1, column=0)
-            return
+        # ── estrutura ─────────────────────────────────────
+        grp_str = QGroupBox("Estrutura")
+        lay_str = QGridLayout(grp_str)
+        lay_str.setSpacing(6)
 
-        def lbl(parent, text, row, col, **kw):
-            tk.Label(parent, text=text, bg="#f5f5f5",
-                     font=("Segoe UI", 10, "bold"), **kw).grid(
-                row=row, column=col, padx=6, pady=3, sticky="w")
+        def lbl(t): return QLabel(t)
+        def combo(vals, default):
+            cb = QComboBox(); cb.addItems(vals)
+            cb.setCurrentText(default); return cb
 
-        all_dim = ["Ano", "Mes", "Categoria", "Sub_Categoria", "Transacao", "Descricao"]
+        lay_str.addWidget(lbl("Linha 1 (grupo):"),    0, 0, Qt.AlignRight)
+        self._row1 = combo(ALL_DIM, "Categoria")
+        lay_str.addWidget(self._row1, 0, 1)
 
-        # ── bloco ESTRUTURA ───────────────────────────────────
-        grp_struct = tk.LabelFrame(self, text="  Estrutura  ", bg="#f5f5f5",
-                                   font=("Segoe UI", 9, "bold"))
-        grp_struct.grid(row=1, column=0, columnspan=6, padx=10, pady=4, sticky="ew")
+        lay_str.addWidget(lbl("Linha 2 (subgrupo):"), 0, 2, Qt.AlignRight)
+        self._row2 = combo(["(nenhuma)"] + ALL_DIM, "Descricao")
+        lay_str.addWidget(self._row2, 0, 3)
 
-        lbl(grp_struct, "Linha 1 (grupo):", 0, 0)
-        self._row1_var = tk.StringVar(value="Categoria")
-        ttk.Combobox(grp_struct, textvariable=self._row1_var, values=all_dim,
-                     width=16, state="readonly").grid(row=0, column=1, padx=4, pady=3)
+        lay_str.addWidget(lbl("Colunas:"),            0, 4, Qt.AlignRight)
+        self._cols = combo(["(nenhuma)"] + ALL_DIM, "Mes")
+        lay_str.addWidget(self._cols, 0, 5)
 
-        lbl(grp_struct, "Linha 2 (subgrupo):", 0, 2)
-        self._row2_var = tk.StringVar(value="Descricao")
-        ttk.Combobox(grp_struct, textvariable=self._row2_var,
-                     values=["(nenhuma)"] + all_dim,
-                     width=16, state="readonly").grid(row=0, column=3, padx=4, pady=3)
+        lay_str.addWidget(lbl("Agregar:"),            1, 0, Qt.AlignRight)
+        self._agg = combo(["sum", "count", "mean", "min", "max"], "sum")
+        self._agg.setFixedWidth(90)
+        lay_str.addWidget(self._agg, 1, 1)
 
-        lbl(grp_struct, "Colunas:", 0, 4)
-        self._cols_var = tk.StringVar(value="Mes")
-        ttk.Combobox(grp_struct, textvariable=self._cols_var,
-                     values=["(nenhuma)"] + all_dim,
-                     width=14, state="readonly").grid(row=0, column=5, padx=4, pady=3)
+        self._chk_sub = QCheckBox("Subtotais"); self._chk_sub.setChecked(True)
+        lay_str.addWidget(self._chk_sub, 1, 2, 1, 2)
+        self._chk_total = QCheckBox("Total Geral"); self._chk_total.setChecked(True)
+        lay_str.addWidget(self._chk_total, 1, 4, 1, 2)
+        root.addWidget(grp_str)
 
-        lbl(grp_struct, "Agregar Valor:", 1, 0)
-        self._agg_var = tk.StringVar(value="sum")
-        ttk.Combobox(grp_struct, textvariable=self._agg_var,
-                     values=["sum", "count", "mean", "min", "max"],
-                     width=10, state="readonly").grid(row=1, column=1, padx=4, pady=3)
+        # ── filtros ───────────────────────────────────────
+        grp_flt = QGroupBox("Filtros de Relatório")
+        lay_flt = QGridLayout(grp_flt)
+        lay_flt.setSpacing(6)
 
-        lbl(grp_struct, "Subtotais:", 1, 2)
-        self._subtotal_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(grp_struct, variable=self._subtotal_var,
-                       bg="#f5f5f5").grid(row=1, column=3, sticky="w")
+        lay_flt.addWidget(lbl("Ano:"),           0, 0, Qt.AlignRight)
+        self._f_ano  = QComboBox(); self._f_ano.setFixedWidth(80)
+        lay_flt.addWidget(self._f_ano, 0, 1)
 
-        lbl(grp_struct, "Total Geral:", 1, 4)
-        self._total_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(grp_struct, variable=self._total_var,
-                       bg="#f5f5f5").grid(row=1, column=5, sticky="w")
+        lay_flt.addWidget(lbl("Mês:"),           0, 2, Qt.AlignRight)
+        self._f_mes  = QComboBox(); self._f_mes.setMinimumWidth(150)
+        lay_flt.addWidget(self._f_mes, 0, 3)
 
-        # ── bloco FILTROS ─────────────────────────────────────
-        grp_filt = tk.LabelFrame(self, text="  Filtros de Relatório  ", bg="#f5f5f5",
-                                  font=("Segoe UI", 9, "bold"))
-        grp_filt.grid(row=2, column=0, columnspan=6, padx=10, pady=4, sticky="ew")
+        lay_flt.addWidget(lbl("Categoria:"),     0, 4, Qt.AlignRight)
+        self._f_cat  = QComboBox(); self._f_cat.setMinimumWidth(160)
+        lay_flt.addWidget(self._f_cat, 0, 5)
 
-        lbl(grp_filt, "Ano:", 0, 0)
-        self._f_ano = tk.StringVar(value="(todos)")
-        self._cb_ano = ttk.Combobox(grp_filt, textvariable=self._f_ano, width=8, state="readonly")
-        self._cb_ano.grid(row=0, column=1, padx=4, pady=3)
+        lay_flt.addWidget(lbl("Transação:"),     1, 0, Qt.AlignRight)
+        self._f_tran = QComboBox(); self._f_tran.setMinimumWidth(200)
+        lay_flt.addWidget(self._f_tran, 1, 1, 1, 2)
 
-        lbl(grp_filt, "Mês:", 0, 2)
-        self._f_mes = tk.StringVar(value="(todos)")
-        meses_vals = ["(todos)"] + [f"{i} – {NOMES_MESES[i]}" for i in range(1, 13)]
-        self._cb_mes = ttk.Combobox(grp_filt, textvariable=self._f_mes,
-                                     values=meses_vals, width=14, state="readonly")
-        self._cb_mes.grid(row=0, column=3, padx=4, pady=3)
+        lay_flt.addWidget(lbl("Sub-Categoria:"), 1, 4, Qt.AlignRight)
+        self._f_sub  = QComboBox(); self._f_sub.setMinimumWidth(160)
+        lay_flt.addWidget(self._f_sub, 1, 5)
+        root.addWidget(grp_flt)
 
-        lbl(grp_filt, "Categoria:", 0, 4)
-        self._f_cat = tk.StringVar(value="(todos)")
-        self._cb_cat = ttk.Combobox(grp_filt, textvariable=self._f_cat, width=18, state="readonly")
-        self._cb_cat.grid(row=0, column=5, padx=4, pady=3)
+        # ── botões ────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        btn_gerar = QPushButton("▶  Gerar Tabela")
+        btn_gerar.setFixedHeight(34)
+        btn_gerar.setStyleSheet("background:#4CAF50;color:white;font-weight:bold;font-size:12px;border-radius:4px;padding:0 12px")
+        btn_gerar.clicked.connect(self._gerar)
 
-        lbl(grp_filt, "Transação:", 1, 0)
-        self._f_tran = tk.StringVar(value="(todos)")
-        self._cb_tran = ttk.Combobox(grp_filt, textvariable=self._f_tran, width=20, state="readonly")
-        self._cb_tran.grid(row=1, column=1, columnspan=2, padx=4, pady=3, sticky="w")
+        btn_exp = QPushButton("Exportar XLSX")
+        btn_exp.setFixedHeight(34)
+        btn_exp.setStyleSheet("background:#1565C0;color:white;font-size:12px;border-radius:4px;padding:0 12px")
+        btn_exp.clicked.connect(self._exportar)
 
-        lbl(grp_filt, "Sub-Categoria:", 1, 4)
-        self._f_sub = tk.StringVar(value="(todos)")
-        self._cb_sub = ttk.Combobox(grp_filt, textvariable=self._f_sub, width=18, state="readonly")
-        self._cb_sub.grid(row=1, column=5, padx=4, pady=3)
+        btn_upd = QPushButton("↺  Atualizar Filtros")
+        btn_upd.setFixedHeight(34)
+        btn_upd.setStyleSheet("background:#757575;color:white;font-size:12px;border-radius:4px;padding:0 12px")
+        btn_upd.clicked.connect(self._atualizar_filtros)
 
-        # ── botões ────────────────────────────────────────────
-        btn_frame = tk.Frame(self, bg="#f5f5f5")
-        btn_frame.grid(row=3, column=0, columnspan=6, pady=6)
-        tk.Button(btn_frame, text="▶  Gerar Tabela", command=self._gerar,
-                  bg="#4CAF50", fg="white", width=16,
-                  font=("Segoe UI", 10, "bold")).pack(side="left", padx=6)
-        tk.Button(btn_frame, text="Exportar XLSX", command=self._exportar,
-                  bg="#1565C0", fg="white", width=14,
-                  font=("Segoe UI", 10)).pack(side="left", padx=6)
-        tk.Button(btn_frame, text="↺  Atualizar Filtros", command=self._atualizar_filtros,
-                  bg="#757575", fg="white", width=16,
-                  font=("Segoe UI", 10)).pack(side="left", padx=6)
+        btn_row.addWidget(btn_gerar)
+        btn_row.addWidget(btn_exp)
+        btn_row.addWidget(btn_upd)
+        btn_row.addStretch()
+        root.addLayout(btn_row)
 
-        # ── resultado ─────────────────────────────────────────
-        res_frame = tk.Frame(self)
-        res_frame.grid(row=4, column=0, columnspan=6, sticky="nsew", padx=8, pady=4)
-        self.rowconfigure(4, weight=1)
-        self.columnconfigure(5, weight=1)
+        # ── resultado ─────────────────────────────────────
+        self._tree = QTreeWidget()
+        self._tree.setAlternatingRowColors(False)
+        self._tree.setUniformRowHeights(True)
+        self._tree.setRootIsDecorated(True)
+        self._tree.setSortingEnabled(False)
+        self._tree.header().setSectionResizeMode(QHeaderView.Interactive)
+        self._tree.setFont(QFont("Segoe UI", 9))
+        root.addWidget(self._tree, 1)
 
-        style = ttk.Style()
-        style.configure("Pivot.Treeview", font=("Segoe UI", 9), rowheight=22)
-        style.configure("Pivot.Treeview.Heading", font=("Segoe UI", 9, "bold"))
+        self._status = QLabel("")
+        self._status.setStyleSheet("color:#555")
+        root.addWidget(self._status)
 
-        self.result_tree = ttk.Treeview(res_frame, show="tree headings",
-                                        style="Pivot.Treeview", selectmode="browse")
-        self.result_tree.tag_configure("grupo",   font=("Segoe UI", 9, "bold"), background="#dce8f5")
-        self.result_tree.tag_configure("total",   font=("Segoe UI", 9, "bold"), background="#c8e6c9")
-        self.result_tree.tag_configure("subitem", font=("Segoe UI", 9))
-
-        vsb = ttk.Scrollbar(res_frame, orient="vertical",   command=self.result_tree.yview)
-        hsb = ttk.Scrollbar(res_frame, orient="horizontal", command=self.result_tree.xview)
-        self.result_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-        self.result_tree.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        hsb.grid(row=1, column=0, sticky="ew")
-        res_frame.rowconfigure(0, weight=1)
-        res_frame.columnconfigure(0, weight=1)
-
-        self._status_lbl = tk.Label(self, text="", bg="#f5f5f5", font=("Segoe UI", 9))
-        self._status_lbl.grid(row=5, column=0, columnspan=6)
         self._atualizar_filtros()
 
-    # ── dados ─────────────────────────────────────────────────
+    # ── dados ─────────────────────────────────────────────
     def _carregar_df(self):
+        if not PANDAS_OK:
+            return None
         cols, rows = buscar_todos()
         if not rows:
             return pd.DataFrame()
@@ -573,168 +633,172 @@ class TabelaDinamicaFrame(tk.Frame):
 
     def _atualizar_filtros(self):
         df = self._carregar_df()
-        self._df = df
-        vazio = ["(todos)"]
-        if df.empty:
-            for cb in (self._cb_ano, self._cb_cat, self._cb_tran, self._cb_sub):
-                cb["values"] = vazio
+        todos = ["(todos)"]
+        if df is None or df.empty:
+            for cb in (self._f_ano, self._f_cat, self._f_tran, self._f_sub):
+                cb.clear(); cb.addItems(todos)
+            self._f_mes.clear()
+            self._f_mes.addItems(todos)
             return
-        anos  = vazio + sorted(df["Ano"].dropna().unique().astype(int).astype(str).tolist())
-        cats  = vazio + sorted(df["Categoria"].dropna().unique().tolist())
-        trans = vazio + sorted(df["Transacao"].dropna().unique().tolist())
-        subs  = vazio + sorted(df["Sub_Categoria"].dropna().unique().tolist())
-        self._cb_ano["values"]  = anos
-        self._cb_cat["values"]  = cats
-        self._cb_tran["values"] = trans
-        self._cb_sub["values"]  = subs
+        anos  = todos + sorted(df["Ano"].dropna().unique().astype(int).astype(str).tolist())
+        cats  = todos + sorted(df["Categoria"].dropna().unique().tolist())
+        trans = todos + sorted(df["Transacao"].dropna().unique().tolist())
+        subs  = todos + sorted(df["Sub_Categoria"].dropna().unique().tolist())
+        meses = todos + [f"{i} – {NOMES_MESES[i]}" for i in range(1, 13)]
+        for cb, vals in ((self._f_ano, anos), (self._f_cat, cats),
+                         (self._f_tran, trans), (self._f_sub, subs),
+                         (self._f_mes, meses)):
+            cur = cb.currentText()
+            cb.clear(); cb.addItems(vals)
+            idx = cb.findText(cur)
+            if idx >= 0: cb.setCurrentIndex(idx)
 
-    # ── formatar valor ────────────────────────────────────────
-    @staticmethod
-    def _fmt(v):
-        if isinstance(v, (int, float)):
-            return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        return str(v) if v is not None else ""
-
-    # ── gerar tabela ──────────────────────────────────────────
+    # ── gerar ─────────────────────────────────────────────
     def _gerar(self):
         self._atualizar_filtros()
-        df = self._df.copy() if self._df is not None else self._carregar_df()
+        df = self._carregar_df()
+        if df is None:
+            QMessageBox.warning(self, "Erro", "pandas não instalado.")
+            return
         if df.empty:
-            messagebox.showinfo("Info", "Banco de dados vazio.")
+            QMessageBox.information(self, "Info", "Banco de dados vazio.")
             return
 
-        # aplicar filtros
-        if self._f_ano.get() != "(todos)":
-            df = df[df["Ano"] == int(self._f_ano.get())]
-        mes_sel = self._f_mes.get()
+        # filtros
+        if self._f_ano.currentText()  != "(todos)":
+            df = df[df["Ano"] == int(self._f_ano.currentText())]
+        mes_sel = self._f_mes.currentText()
         if mes_sel != "(todos)":
-            num_mes = int(mes_sel.split(" – ")[0])
-            df = df[df["Mes"] == num_mes]
-        if self._f_cat.get()  != "(todos)": df = df[df["Categoria"]    == self._f_cat.get()]
-        if self._f_tran.get() != "(todos)": df = df[df["Transacao"]    == self._f_tran.get()]
-        if self._f_sub.get()  != "(todos)": df = df[df["Sub_Categoria"]== self._f_sub.get()]
+            df = df[df["Mes"] == int(mes_sel.split(" – ")[0])]
+        if self._f_cat.currentText()  != "(todos)":
+            df = df[df["Categoria"]     == self._f_cat.currentText()]
+        if self._f_tran.currentText() != "(todos)":
+            df = df[df["Transacao"]     == self._f_tran.currentText()]
+        if self._f_sub.currentText()  != "(todos)":
+            df = df[df["Sub_Categoria"] == self._f_sub.currentText()]
 
         if df.empty:
-            messagebox.showinfo("Info", "Nenhum dado para os filtros selecionados.")
+            QMessageBox.information(self, "Info", "Nenhum dado para os filtros selecionados.")
             return
 
-        row1     = self._row1_var.get()
-        row2     = self._row2_var.get()
-        col_fld  = self._cols_var.get()
-        agg      = self._agg_var.get()
-        subtotal = self._subtotal_var.get()
-        total_g  = self._total_var.get()
-        use_row2 = (row2 != "(nenhuma)")
-        use_cols = (col_fld != "(nenhuma)")
+        row1     = self._row1.currentText()
+        row2     = self._row2.currentText()
+        col_fld  = self._cols.currentText()
+        agg      = self._agg.currentText()
+        use_row2 = row2 != "(nenhuma)"
+        use_cols = col_fld != "(nenhuma)"
 
-        # determinar colunas dinâmicas
-        if use_cols:
-            col_vals = sorted(df[col_fld].dropna().unique().tolist(),
-                              key=lambda x: (int(x) if str(x).lstrip("-").isdigit() else 0, str(x)))
-        else:
-            col_vals = ["Valor"]
+        col_vals = (
+            sorted(df[col_fld].dropna().unique().tolist(),
+                   key=lambda x: (int(x) if str(x).lstrip("-").isdigit() else 0, str(x)))
+            if use_cols else ["Valor"]
+        )
 
-        # helper de agregação — retorna 0 em vez de NaN para subconjuntos vazios
         def agregar(sub):
-            if sub.empty:
-                return 0.0
+            if sub.empty: return 0.0
             if agg == "sum":   return float(sub["Valor"].sum())
             if agg == "count": return float(sub["Valor"].count())
-            if agg == "mean":  v = sub["Valor"].mean();  return 0.0 if pd.isna(v) else float(v)
-            if agg == "min":   v = sub["Valor"].min();   return 0.0 if pd.isna(v) else float(v)
-            if agg == "max":   v = sub["Valor"].max();   return 0.0 if pd.isna(v) else float(v)
-            return 0.0
+            v = getattr(sub["Valor"], agg)()
+            return 0.0 if pd.isna(v) else float(v)
 
         def vals_por_col(sub):
-            if use_cols:
-                return {str(cv): agregar(sub[sub[col_fld] == cv]) for cv in col_vals}
-            else:
-                return {"Valor": agregar(sub)}
+            return ({str(cv): agregar(sub[sub[col_fld] == cv]) for cv in col_vals}
+                    if use_cols else {"Valor": agregar(sub)})
 
-        def soma_dict(d):
+        def soma_d(d):
             return sum(v for v in d.values() if isinstance(v, (int, float)) and not pd.isna(v))
 
-        # ── configurar colunas do treeview ────────────────────
-        # #0 = coluna de árvore (rótulo da linha)
-        # colunas nomeadas = valores dinâmicos + Total Geral
-        val_col_labels = [str(cv) for cv in col_vals] + ["Total Geral"]
-        val_col_ids    = [f"v{i}" for i in range(len(val_col_labels))]
+        # ── configurar QTreeWidget ────────────────────────
+        hdrs = [f"{row1}" + (f" / {row2}" if use_row2 else "")] + \
+               [str(cv) for cv in col_vals] + ["Total Geral"]
+        self._tree.clear()
+        self._tree.setColumnCount(len(hdrs))
+        self._tree.setHeaderLabels(hdrs)
+        self._tree.header().setSectionResizeMode(0, QHeaderView.Interactive)
+        self._tree.setColumnWidth(0, 210)
+        for c in range(1, len(hdrs)):
+            self._tree.setColumnWidth(c, 105)
+            self._tree.header().setSectionResizeMode(c, QHeaderView.Interactive)
 
-        self.result_tree["columns"] = val_col_ids
-        for i in self.result_tree.get_children():
-            self.result_tree.delete(i)
+        font_bold = QFont("Segoe UI", 9, QFont.Bold)
+        font_reg  = QFont("Segoe UI", 9)
 
-        # coluna da árvore (#0)
-        tree_lbl = f"{row1}" + (f"  /  {row2}" if use_row2 else "")
-        self.result_tree.heading("#0", text=tree_lbl, anchor="w")
-        self.result_tree.column("#0", width=200, stretch=False, anchor="w")
-
-        for vid, vlbl in zip(val_col_ids, val_col_labels):
-            self.result_tree.heading(vid, text=str(vlbl), anchor="e")
-            w = 105 if vid != val_col_ids[-1] else 115
-            self.result_tree.column(vid, width=w, stretch=False, anchor="e")
-
-        # ── preencher árvore ──────────────────────────────────
-        export_rows = [[tree_lbl] + val_col_labels]
-        grand_totals = {str(cv): 0.0 for cv in col_vals}
-
+        export_rows = [hdrs]
+        grand = {str(cv): 0.0 for cv in col_vals}
         grupos = sorted(df[row1].dropna().unique().tolist())
+
         for g in grupos:
-            g_df       = df[df[row1] == g]
-            g_col_vals = vals_por_col(g_df)
-            g_total    = soma_dict(g_col_vals)
+            g_df  = df[df[row1] == g]
+            g_cv  = vals_por_col(g_df)
+            g_tot = soma_d(g_cv)
+            for k in grand: grand[k] += g_cv.get(k, 0.0)
 
-            for k in grand_totals:
-                grand_totals[k] += g_col_vals.get(k, 0.0)
+            # nó pai (grupo / subtotal)
+            g_strs = [fmt_valor(g_cv.get(str(cv), 0)) for cv in col_vals] + [fmt_valor(g_tot)]
+            parent = QTreeWidgetItem([str(g)] + g_strs)
+            parent.setFont(0, font_bold)
+            parent.setBackground(0, QBrush(BG_GRUPO))
+            for c in range(1, len(hdrs)):
+                parent.setFont(c, font_bold)
+                parent.setBackground(c, QBrush(BG_GRUPO))
+                v = g_cv.get(str(col_vals[c-1]), g_tot) if c < len(hdrs)-1 else g_tot
+                parent.setForeground(c, QBrush(cor_valor(v)))
+                parent.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter)
+            export_rows.append([str(g)] + g_strs)
 
-            g_vals_fmt = [self._fmt(g_col_vals.get(str(cv), 0)) for cv in col_vals] + \
-                         [self._fmt(g_total)]
-
-            safe_iid = f"g_{g}"
             if use_row2:
-                self.result_tree.insert("", "end", iid=safe_iid, text=g,
-                                        values=g_vals_fmt, open=False, tags=("grupo",))
-                export_rows.append([g] + g_vals_fmt)
-
                 subgrupos = sorted(g_df[row2].dropna().unique().tolist())
                 for sg in subgrupos:
                     sg_df  = g_df[g_df[row2] == sg]
                     sg_cv  = vals_por_col(sg_df)
-                    sg_tot = soma_dict(sg_cv)
-                    sg_fmt = [self._fmt(sg_cv.get(str(cv), 0)) for cv in col_vals] + \
-                             [self._fmt(sg_tot)]
-                    self.result_tree.insert(safe_iid, "end", text=sg,
-                                            values=sg_fmt, tags=("subitem",))
-                    export_rows.append(["  " + sg] + sg_fmt)
-            else:
-                self.result_tree.insert("", "end", iid=safe_iid, text=g,
-                                        values=g_vals_fmt, tags=("grupo",))
-                export_rows.append([g] + g_vals_fmt)
+                    sg_tot = soma_d(sg_cv)
+                    sg_strs = [fmt_valor(sg_cv.get(str(cv), 0)) for cv in col_vals] + \
+                              [fmt_valor(sg_tot)]
+                    child = QTreeWidgetItem([str(sg)] + sg_strs)
+                    child.setFont(0, font_reg)
+                    for c in range(1, len(hdrs)):
+                        child.setFont(c, font_reg)
+                        v = sg_cv.get(str(col_vals[c-1]), sg_tot) if c < len(hdrs)-1 else sg_tot
+                        child.setForeground(c, QBrush(cor_valor(v)))
+                        child.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter)
+                    parent.addChild(child)
+                    export_rows.append(["  " + str(sg)] + sg_strs)
 
-        if total_g:
-            gt_total    = soma_dict(grand_totals)
-            gt_vals_fmt = [self._fmt(grand_totals.get(str(cv), 0)) for cv in col_vals] + \
-                          [self._fmt(gt_total)]
-            self.result_tree.insert("", "end", text="Total Geral",
-                                    values=gt_vals_fmt, tags=("total",))
-            export_rows.append(["Total Geral"] + gt_vals_fmt)
+            self._tree.addTopLevelItem(parent)
+            parent.setExpanded(False)   # recolhido por padrão
 
-        self._export_data = export_rows
-        self._export_cols = [tree_lbl] + val_col_labels
-        self._status_lbl.config(
-            text=f"{len(grupos)} grupos | {len(df)} registros | agreg: {agg}  "
-                 f"{'(clique no ▶ para expandir grupos)' if use_row2 else ''}")
+        # Total Geral
+        if self._chk_total.isChecked():
+            gt_tot  = soma_d(grand)
+            gt_strs = [fmt_valor(grand.get(str(cv), 0)) for cv in col_vals] + [fmt_valor(gt_tot)]
+            total_item = QTreeWidgetItem(["Total Geral"] + gt_strs)
+            total_item.setFont(0, font_bold)
+            total_item.setBackground(0, QBrush(BG_TOTAL))
+            for c in range(1, len(hdrs)):
+                total_item.setFont(c, font_bold)
+                total_item.setBackground(c, QBrush(BG_TOTAL))
+                v = grand.get(str(col_vals[c-1]), gt_tot) if c < len(hdrs)-1 else gt_tot
+                total_item.setForeground(c, QBrush(cor_valor(v)))
+                total_item.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter)
+            self._tree.addTopLevelItem(total_item)
+            export_rows.append(["Total Geral"] + gt_strs)
 
-    # ── exportar ──────────────────────────────────────────────
+        self._export_rows = export_rows
+        self._status.setText(
+            f"{len(grupos)} grupos  |  {len(df)} registros  |  agreg: {agg}"
+            + ("  —  clique no ▶ para expandir" if use_row2 else ""))
+
+    # ── exportar ──────────────────────────────────────────
     def _exportar(self):
-        if not self._export_data:
-            messagebox.showinfo("Info", "Gere a tabela antes de exportar.")
+        if not self._export_rows:
+            QMessageBox.information(self, "Info", "Gere a tabela antes de exportar.")
             return
         if not OPENPYXL_OK:
-            messagebox.showerror("Erro", "openpyxl não instalado.\nExecute: pip install openpyxl")
+            QMessageBox.critical(self, "Erro",
+                "openpyxl não instalado.\nExecute: pip install openpyxl")
             return
-        path = filedialog.asksaveasfilename(defaultextension=".xlsx",
-                                            filetypes=[("Excel", "*.xlsx")])
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Salvar como", "", "Excel (*.xlsx)")
         if not path:
             return
         import openpyxl
@@ -742,56 +806,68 @@ class TabelaDinamicaFrame(tk.Frame):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Tabela Dinâmica"
-        for r_idx, row in enumerate(self._export_data, start=1):
-            for c_idx, val in enumerate(row, start=1):
+        for r_idx, row in enumerate(self._export_rows, 1):
+            for c_idx, val in enumerate(row, 1):
                 cell = ws.cell(row=r_idx, column=c_idx, value=val)
+                cell.alignment = Alignment(horizontal="right" if c_idx > 1 else "left")
                 if r_idx == 1:
-                    cell.font = Font(bold=True)
-                    cell.fill = PatternFill("solid", fgColor="4472C4")
                     cell.font = Font(bold=True, color="FFFFFF")
+                    cell.fill = PatternFill("solid", fgColor="4472C4")
                 elif "Total" in str(row[0]):
                     cell.font = Font(bold=True)
                     cell.fill = PatternFill("solid", fgColor="E2EFDA")
-                cell.alignment = Alignment(horizontal="right" if c_idx > 2 else "left")
+                elif c_idx > 1:
+                    try:
+                        v = float(str(val).replace("R$","").replace(".","")
+                                         .replace(",",".").strip())
+                        cell.font = Font(color="C62828" if v < 0 else "1B5E20")
+                    except (ValueError, AttributeError):
+                        pass
         for col in ws.columns:
-            max_len = max((len(str(c.value or "")) for c in col), default=8)
-            ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 40)
+            w = max((len(str(c.value or "")) for c in col), default=8)
+            ws.column_dimensions[col[0].column_letter].width = min(w + 2, 40)
         wb.save(path)
-        messagebox.showinfo("Sucesso", f"Exportado para:\n{path}")
+        QMessageBox.information(self, "Sucesso", f"Exportado para:\n{path}")
 
 
-# ─────────────────────────── APLICATIVO PRINCIPAL ──────────
+# ═══════════════════════════════════════════════════════════
+#  JANELA PRINCIPAL
+# ═══════════════════════════════════════════════════════════
 
-class App(tk.Tk):
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.title("Tabela Dinâmica")
-        self.geometry("980x700")
-        self.minsize(800, 560)
-        self._build()
+        self.setWindowTitle("Tabela Dinâmica")
+        self.resize(1100, 720)
+        self.setMinimumSize(800, 560)
 
-    def _build(self):
-        # barra de abas
-        nb = ttk.Notebook(self)
-        nb.pack(fill="both", expand=True)
+        tabs = QTabWidget()
+        tabs.setDocumentMode(True)
+        tabs.setFont(QFont("Segoe UI", 10))
 
-        self.formulario = FormularioFrame(nb, self)
-        self.importacao = ImportacaoFrame(nb, self)
-        self.pivot = TabelaDinamicaFrame(nb, self)
+        self._aba_form   = AbaForm()
+        self._aba_import = AbaImport(self._aba_form)
+        self._aba_pivot  = AbaPivot()
 
-        nb.add(self.formulario, text="  Dados  ")
-        nb.add(self.importacao, text="  Importar  ")
-        nb.add(self.pivot, text="  Tabela Dinâmica  ")
+        tabs.addTab(self._aba_form,   "  Dados  ")
+        tabs.addTab(self._aba_import, "  Importar  ")
+        tabs.addTab(self._aba_pivot,  "  Tabela Dinâmica  ")
+        tabs.currentChanged.connect(self._on_tab)
 
-        nb.bind("<<NotebookTabChanged>>", self._on_tab)
+        self.setCentralWidget(tabs)
+        self.statusBar().showMessage("Pronto")
 
-    def _on_tab(self, event):
-        tab = event.widget.tab(event.widget.select(), "text").strip()
-        if tab == "Tabela Dinâmica":
-            self.pivot._atualizar_filtros()
+    def _on_tab(self, idx):
+        if idx == 2:
+            self._aba_pivot._atualizar_filtros()
 
+
+# ═══════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     init_db()
-    app = App()
-    app.mainloop()
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+    win = MainWindow()
+    win.show()
+    sys.exit(app.exec_())

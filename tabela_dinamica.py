@@ -541,8 +541,8 @@ class TabelaDinamicaFrame(tk.Frame):
         style.configure("Pivot.Treeview", font=("Segoe UI", 9), rowheight=22)
         style.configure("Pivot.Treeview.Heading", font=("Segoe UI", 9, "bold"))
 
-        self.result_tree = ttk.Treeview(res_frame, show="headings", style="Pivot.Treeview",
-                                         selectmode="browse")
+        self.result_tree = ttk.Treeview(res_frame, show="tree headings",
+                                        style="Pivot.Treeview", selectmode="browse")
         self.result_tree.tag_configure("grupo",   font=("Segoe UI", 9, "bold"), background="#dce8f5")
         self.result_tree.tag_configure("total",   font=("Segoe UI", 9, "bold"), background="#c8e6c9")
         self.result_tree.tag_configure("subitem", font=("Segoe UI", 9))
@@ -634,14 +634,16 @@ class TabelaDinamicaFrame(tk.Frame):
         else:
             col_vals = ["Valor"]
 
-        # helper de agregação
+        # helper de agregação — retorna 0 em vez de NaN para subconjuntos vazios
         def agregar(sub):
-            if agg == "sum":   return sub["Valor"].sum()
-            if agg == "count": return sub["Valor"].count()
-            if agg == "mean":  return sub["Valor"].mean()
-            if agg == "min":   return sub["Valor"].min()
-            if agg == "max":   return sub["Valor"].max()
-            return 0
+            if sub.empty:
+                return 0.0
+            if agg == "sum":   return float(sub["Valor"].sum())
+            if agg == "count": return float(sub["Valor"].count())
+            if agg == "mean":  v = sub["Valor"].mean();  return 0.0 if pd.isna(v) else float(v)
+            if agg == "min":   v = sub["Valor"].min();   return 0.0 if pd.isna(v) else float(v)
+            if agg == "max":   v = sub["Valor"].max();   return 0.0 if pd.isna(v) else float(v)
+            return 0.0
 
         def vals_por_col(sub):
             if use_cols:
@@ -649,72 +651,82 @@ class TabelaDinamicaFrame(tk.Frame):
             else:
                 return {"Valor": agregar(sub)}
 
-        # montar colunas do treeview
-        tree_cols_labels = [row1] + ([row2] if use_row2 else []) + [str(cv) for cv in col_vals] + ["Total Geral"]
-        tree_cols_ids    = [f"c{i}" for i in range(len(tree_cols_labels))]
+        def soma_dict(d):
+            return sum(v for v in d.values() if isinstance(v, (int, float)) and not pd.isna(v))
 
-        self.result_tree["columns"] = tree_cols_ids
+        # ── configurar colunas do treeview ────────────────────
+        # #0 = coluna de árvore (rótulo da linha)
+        # colunas nomeadas = valores dinâmicos + Total Geral
+        val_col_labels = [str(cv) for cv in col_vals] + ["Total Geral"]
+        val_col_ids    = [f"v{i}" for i in range(len(val_col_labels))]
+
+        self.result_tree["columns"] = val_col_ids
         for i in self.result_tree.get_children():
             self.result_tree.delete(i)
-        for cid, clbl in zip(tree_cols_ids, tree_cols_labels):
-            w = 160 if cid == "c0" else (130 if (use_row2 and cid == "c1") else 85)
-            self.result_tree.heading(cid, text=str(clbl))
-            self.result_tree.column(cid, width=w,
-                                    anchor="w" if cid in ("c0", "c1") else "e")
 
-        export_rows = [tree_cols_labels]
+        # coluna da árvore (#0)
+        tree_lbl = f"{row1}" + (f"  /  {row2}" if use_row2 else "")
+        self.result_tree.heading("#0", text=tree_lbl, anchor="w")
+        self.result_tree.column("#0", width=200, stretch=False, anchor="w")
+
+        for vid, vlbl in zip(val_col_ids, val_col_labels):
+            self.result_tree.heading(vid, text=str(vlbl), anchor="e")
+            w = 105 if vid != val_col_ids[-1] else 115
+            self.result_tree.column(vid, width=w, stretch=False, anchor="e")
+
+        # ── preencher árvore ──────────────────────────────────
+        export_rows = [[tree_lbl] + val_col_labels]
         grand_totals = {str(cv): 0.0 for cv in col_vals}
 
         grupos = sorted(df[row1].dropna().unique().tolist())
         for g in grupos:
-            g_df = df[df[row1] == g]
+            g_df       = df[df[row1] == g]
             g_col_vals = vals_por_col(g_df)
-            g_total    = sum(g_col_vals.values())
-            for k in grand_totals:
-                grand_totals[k] += g_col_vals.get(k, 0)
+            g_total    = soma_dict(g_col_vals)
 
+            # acumular grand total (somente sum/count fazem sentido; mean acumula separado)
+            for k in grand_totals:
+                grand_totals[k] += g_col_vals.get(k, 0.0)
+
+            # valores formatados para o nó de grupo (= subtotal da categoria)
+            g_vals_fmt = [self._fmt(g_col_vals.get(str(cv), 0)) for cv in col_vals] + \
+                         [self._fmt(g_total)]
+
+            safe_iid = f"g_{g}"
             if use_row2:
-                # linha de grupo (sem valores, só o nome — como Excel)
-                grp_row = [g] + [""] + [""] * len(col_vals) + [""]
-                iid_grp = self.result_tree.insert("", "end", values=grp_row, tags=("grupo",))
-                export_rows.append(grp_row)
+                # nó pai: fechado por padrão, mostra subtotais
+                self.result_tree.insert("", "end", iid=safe_iid, text=g,
+                                        values=g_vals_fmt, open=False, tags=("grupo",))
+                export_rows.append([g] + g_vals_fmt)
 
                 subgrupos = sorted(g_df[row2].dropna().unique().tolist())
                 for sg in subgrupos:
-                    sg_df = g_df[g_df[row2] == sg]
-                    sg_cv = vals_por_col(sg_df)
-                    sg_tot = sum(sg_cv.values())
-                    sub_row = [""] + [str(sg)] + \
-                              [self._fmt(sg_cv.get(str(cv), "")) for cv in col_vals] + \
-                              [self._fmt(sg_tot)]
-                    self.result_tree.insert("", "end", values=sub_row, tags=("subitem",))
-                    export_rows.append(sub_row)
-
-                if subtotal:
-                    sub_total_row = [f"{g} Total"] + [""] + \
-                                    [self._fmt(g_col_vals.get(str(cv), "")) for cv in col_vals] + \
-                                    [self._fmt(g_total)]
-                    self.result_tree.insert("", "end", values=sub_total_row, tags=("grupo",))
-                    export_rows.append(sub_total_row)
+                    sg_df  = g_df[g_df[row2] == sg]
+                    sg_cv  = vals_por_col(sg_df)
+                    sg_tot = soma_dict(sg_cv)
+                    sg_fmt = [self._fmt(sg_cv.get(str(cv), 0)) for cv in col_vals] + \
+                             [self._fmt(sg_tot)]
+                    self.result_tree.insert(safe_iid, "end", text=sg,
+                                            values=sg_fmt, tags=("subitem",))
+                    export_rows.append(["  " + sg] + sg_fmt)
             else:
-                # sem row2: linha simples por grupo
-                row_vals = [g] + [self._fmt(g_col_vals.get(str(cv), "")) for cv in col_vals] + \
-                           [self._fmt(g_total)]
-                self.result_tree.insert("", "end", values=row_vals, tags=("grupo",))
-                export_rows.append(row_vals)
+                self.result_tree.insert("", "end", iid=safe_iid, text=g,
+                                        values=g_vals_fmt, tags=("grupo",))
+                export_rows.append([g] + g_vals_fmt)
 
         if total_g:
-            gt_total = sum(grand_totals.values())
-            total_row = ["Total Geral"] + ([""] if use_row2 else []) + \
-                        [self._fmt(grand_totals.get(str(cv), "")) for cv in col_vals] + \
-                        [self._fmt(gt_total)]
-            self.result_tree.insert("", "end", values=total_row, tags=("total",))
-            export_rows.append(total_row)
+            gt_total    = soma_dict(grand_totals)
+            gt_vals_fmt = [self._fmt(grand_totals.get(str(cv), 0)) for cv in col_vals] + \
+                          [self._fmt(gt_total)]
+            self.result_tree.insert("", "end", text="Total Geral",
+                                    values=gt_vals_fmt, tags=("total",))
+            export_rows.append(["Total Geral"] + gt_vals_fmt)
 
         self._export_data = export_rows
-        self._export_cols = tree_cols_labels
+        self._export_cols = [tree_lbl] + val_col_labels
         self._status_lbl.config(
-            text=f"{len(grupos)} grupos | {len(df)} registros | agreg: {agg}")
+            text=f"{len(grupos)} grupos | {len(df)} registros | agreg: {agg}  "
+                 f"{'(clique no ▶ para expandir grupos)' if use_row2 else ''}")
 
     # ── exportar ──────────────────────────────────────────────
     def _exportar(self):

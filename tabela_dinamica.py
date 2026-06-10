@@ -105,32 +105,65 @@ def apagar_banco():
     con.close()
 
 
-def importar_df(df: "pd.DataFrame", modo: str):
-    col_map = {c.lower(): c for c in df.columns}
+def _parse_valor(raw) -> float:
+    """Converte strings como '-R$ 55,48' ou '1.234,56' para float."""
+    import re
+    s = str(raw).strip()
+    s = re.sub(r"[R$\s]", "", s)   # remove R$, espaços
+    # detecta formato BR (último separador é vírgula): 1.234,56
+    if "," in s and "." in s:
+        if s.rindex(",") > s.rindex("."):   # BR: 1.234,56
+            s = s.replace(".", "").replace(",", ".")
+        else:                               # EN: 1,234.56
+            s = s.replace(",", "")
+    else:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
 
-    def get(name):
-        return col_map.get(name.lower(), col_map.get(name.lower().replace(" ", "_"), None))
+
+def importar_df(df: "pd.DataFrame", modo: str):
+    col_map = {c.lower().strip(): c for c in df.columns}
+
+    def get(*names):
+        """Retorna o nome original da coluna para qualquer alias."""
+        for name in names:
+            key = name.lower().strip()
+            if key in col_map:
+                return col_map[key]
+        # busca parcial: coluna que começa com o primeiro nome
+        prefix = names[0].lower().strip()
+        for k, v in col_map.items():
+            if k.startswith(prefix):
+                return v
+        return None
 
     if modo == "sobrescrever":
         apagar_banco()
 
+    col_data  = get("data e hora", "data")
+    col_cat   = get("categoria")
+    col_sub   = get("sub_categoria", "sub-categoria", "subcategoria")
+    col_tran  = get("transação", "transacao", "transação")
+    col_desc  = get("descrição", "descricao", "descrição")
+    col_valor = get("valor")
+
     con = sqlite3.connect(DB_PATH)
     for _, r in df.iterrows():
-        data_val = str(r.get(get("Data") or "", "")).strip()
+        data_val = str(r[col_data]).strip() if col_data else ""
         mes, ano = _mes_ano(data_val)
-        try:
-            valor = float(str(r.get(get("Valor") or "", 0)).replace(",", ".") or 0)
-        except (ValueError, TypeError):
-            valor = 0.0
+        valor    = _parse_valor(r[col_valor]) if col_valor else 0.0
         con.execute("""
             INSERT INTO registros (Data, Mes, Ano, Categoria, Sub_Categoria, Transacao, Descricao, Valor)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data_val, mes, ano,
-            str(r.get(get("Categoria") or "", "") or ""),
-            str(r.get(get("Sub_Categoria") or get("Sub-Categoria") or "", "") or ""),
-            str(r.get(get("Transacao") or get("Transação") or "", "") or ""),
-            str(r.get(get("Descricao") or get("Descrição") or "", "") or ""),
+            str(r[col_cat])  if col_cat  else "",
+            str(r[col_sub])  if col_sub  else "",
+            str(r[col_tran]) if col_tran else "",
+            str(r[col_desc]) if col_desc else "",
             valor,
         ))
     con.commit()

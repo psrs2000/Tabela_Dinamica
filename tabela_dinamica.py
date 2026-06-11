@@ -309,9 +309,12 @@ class AbaForm(QWidget):
 
         # botões do formulário
         btn_row = QHBoxLayout()
-        self._btn_salvar  = _btn("Salvar",            "#4CAF50", self._salvar)
-        self._btn_limpar  = _btn("Limpar",             "#2196F3", self._limpar)
-        self._btn_excluir = _btn("Excluir Selecionado","#f44336", self._excluir, 140)
+        self._btn_salvar  = _btn("Salvar",             "#4CAF50", self._salvar,  140)
+        self._btn_limpar  = _btn("Limpar",             "#2196F3", self._limpar,  140)
+        self._btn_excluir = _btn("Excluir Selecionado","#f44336", self._excluir, 180)
+        for b in (self._btn_salvar, self._btn_limpar, self._btn_excluir):
+            b.setStyleSheet(b.styleSheet().replace("padding:6px 18px", "padding:10px 28px")
+                                          .replace("font-size:12px", "font-size:14px"))
         btn_row.addWidget(self._btn_salvar)
         btn_row.addWidget(self._btn_limpar)
         btn_row.addWidget(self._btn_excluir)
@@ -872,7 +875,7 @@ class AbaPivot(QWidget):
         self._tree.setRootIsDecorated(True)
         self._tree.setSortingEnabled(False)
         self._tree.header().setSectionResizeMode(QHeaderView.Interactive)
-        self._tree.setFont(QFont("Segoe UI", 9))
+        self._tree.setFont(QFont("Segoe UI", 11))
         root.addWidget(self._tree, 1)
 
         self._status = QLabel("")
@@ -983,8 +986,8 @@ class AbaPivot(QWidget):
             self._tree.setColumnWidth(c, 105)
             self._tree.header().setSectionResizeMode(c, QHeaderView.Interactive)
 
-        font_bold = QFont("Segoe UI", 9, QFont.Bold)
-        font_reg  = QFont("Segoe UI", 9)
+        font_bold = QFont("Segoe UI", 11, QFont.Bold)
+        font_reg  = QFont("Segoe UI", 11)
 
         export_rows = [hdrs]
         grand = {str(cv): 0.0 for cv in col_vals}

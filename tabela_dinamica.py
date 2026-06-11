@@ -23,9 +23,9 @@ from PyQt5.QtWidgets import (
     QRadioButton, QButtonGroup, QGroupBox, QFileDialog,
     QMessageBox, QTableWidget, QTableWidgetItem,
     QTreeWidget, QTreeWidgetItem, QHeaderView, QSplitter,
-    QAbstractItemView, QStatusBar, QFrame,
+    QAbstractItemView, QStatusBar, QFrame, QCompleter,
 )
-from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtCore import Qt, QSize, QSortFilterProxyModel, QStringListModel
 from PyQt5.QtGui import QColor, QBrush, QFont, QPalette
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dados.db")
@@ -213,98 +213,208 @@ def item_valor(v) -> QTableWidgetItem:
     return it
 
 
+def buscar_distintos(campo: str) -> list:
+    con = sqlite3.connect(DB_PATH)
+    cur = con.execute(
+        f"SELECT DISTINCT {campo} FROM registros WHERE {campo} IS NOT NULL AND {campo}!='' ORDER BY {campo}")
+    vals = [r[0] for r in cur.fetchall()]
+    con.close()
+    return vals
+
+
+def _btn(texto, cor_bg, slot, min_w=100):
+    """Cria um QPushButton padronizado."""
+    b = QPushButton(texto)
+    b.setStyleSheet(
+        f"QPushButton{{background:{cor_bg};color:white;border-radius:4px;"
+        f"padding:4px 12px;font-weight:bold;}}"
+        f"QPushButton:hover{{opacity:0.85;}}"
+    )
+    b.setMinimumWidth(min_w)
+    b.clicked.connect(slot)
+    return b
+
+
 # ═══════════════════════════════════════════════════════════
 #  ABA DADOS
 # ═══════════════════════════════════════════════════════════
 
+COLS_DADOS = ["id", "Data", "Mês", "Ano", "Categoria", "Sub-Categoria",
+              "Transação", "Descrição", "Valor"]
+
 class AbaForm(QWidget):
     def __init__(self):
         super().__init__()
-        self._edit_id = None
+        self._edit_id  = None
+        self._all_rows = []   # cache completo para filtro local
         self._build()
 
+    # ── construção ────────────────────────────────────────
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 8)
+        root.setContentsMargins(10, 8, 10, 6)
+        root.setSpacing(6)
 
         # ── formulário ────────────────────────────────────
         grp = QGroupBox("Registro")
-        grp.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        form = QFormLayout(grp)
-        form.setLabelAlignment(Qt.AlignRight)
-        form.setSpacing(8)
+        form = QGridLayout(grp)
+        form.setSpacing(5)
+        form.setContentsMargins(8, 6, 8, 6)
 
         self._campos = {}
         specs = [
-            ("Data",          "Data  (dd/mm/aaaa  ou  dd/mm/aaaa hh:mm:ss)"),
-            ("Categoria",     "Categoria"),
-            ("Sub_Categoria", "Sub-Categoria"),
-            ("Transacao",     "Transação"),
-            ("Descricao",     "Descrição"),
-            ("Valor",         "Valor"),
+            ("Data",          "Data (dd/mm/aaaa hh:mm:ss)", False),
+            ("Categoria",     "Categoria",                   True),
+            ("Sub_Categoria", "Sub-Categoria",               True),
+            ("Transacao",     "Transação",                   False),
+            ("Descricao",     "Descrição",                   False),
+            ("Valor",         "Valor",                       False),
         ]
-        for key, lbl in specs:
-            ed = QLineEdit()
-            ed.setFixedHeight(28)
-            form.addRow(lbl + ":", ed)
-            self._campos[key] = ed
+        for row_idx, (key, lbl_txt, is_combo) in enumerate(specs):
+            form.addWidget(QLabel(lbl_txt + ":"), row_idx, 0, Qt.AlignRight)
+            if is_combo:
+                w = QComboBox()
+                w.setEditable(True)
+                w.setInsertPolicy(QComboBox.NoInsert)
+                w.setMinimumWidth(260)
+                comp = QCompleter([], w)
+                comp.setCaseSensitivity(Qt.CaseInsensitive)
+                comp.setFilterMode(Qt.MatchContains)
+                w.setCompleter(comp)
+            else:
+                w = QLineEdit()
+            form.addWidget(w, row_idx, 1, Qt.AlignLeft)
+            self._campos[key] = w
 
-        # botões
+        # botões do formulário
         btn_row = QHBoxLayout()
-        self._btn_salvar = QPushButton("Salvar")
-        self._btn_salvar.setFixedHeight(32)
-        self._btn_salvar.setStyleSheet("background:#4CAF50;color:white;font-weight:bold;border-radius:4px")
-        self._btn_salvar.clicked.connect(self._salvar)
-
-        self._btn_limpar = QPushButton("Limpar")
-        self._btn_limpar.setFixedHeight(32)
-        self._btn_limpar.setStyleSheet("background:#2196F3;color:white;border-radius:4px")
-        self._btn_limpar.clicked.connect(self._limpar)
-
-        self._btn_excluir = QPushButton("Excluir Selecionado")
-        self._btn_excluir.setFixedHeight(32)
-        self._btn_excluir.setStyleSheet("background:#f44336;color:white;border-radius:4px")
-        self._btn_excluir.clicked.connect(self._excluir)
-
+        self._btn_salvar  = _btn("Salvar",            "#4CAF50", self._salvar)
+        self._btn_limpar  = _btn("Limpar",             "#2196F3", self._limpar)
+        self._btn_excluir = _btn("Excluir Selecionado","#f44336", self._excluir, 140)
         btn_row.addWidget(self._btn_salvar)
         btn_row.addWidget(self._btn_limpar)
         btn_row.addWidget(self._btn_excluir)
         btn_row.addStretch()
-        form.addRow(btn_row)
+        form.addLayout(btn_row, len(specs), 0, 1, 2)
         root.addWidget(grp)
 
-        # ── tabela de registros ───────────────────────────
-        COLS = ["id", "Data", "Mês", "Ano", "Categoria", "Sub-Cat.",
-                "Transação", "Descrição", "Valor"]
-        self._table = QTableWidget(0, len(COLS))
-        self._table.setHorizontalHeaderLabels(COLS)
+        # ── barra de filtros ──────────────────────────────
+        flt_grp = QGroupBox("Filtros / Pesquisa")
+        flt_lay = QHBoxLayout(flt_grp)
+        flt_lay.setSpacing(6)
+        flt_lay.setContentsMargins(8, 4, 8, 4)
+
+        self._flt_widgets = {}
+        flt_specs = [
+            ("cat",  "Categoria",     120),
+            ("sub",  "Sub-Categoria", 120),
+            ("tran", "Transação",     150),
+            ("desc", "Descrição",     160),
+        ]
+        for key, placeholder, w_px in flt_specs:
+            ed = QLineEdit()
+            ed.setPlaceholderText(placeholder)
+            ed.setFixedWidth(w_px)
+            ed.textChanged.connect(self._aplicar_filtro)
+            flt_lay.addWidget(ed)
+            self._flt_widgets[key] = ed
+
+        flt_lay.addWidget(QLabel("Ano:"))
+        self._flt_ano = QComboBox(); self._flt_ano.setFixedWidth(70)
+        self._flt_ano.currentTextChanged.connect(self._aplicar_filtro)
+        flt_lay.addWidget(self._flt_ano)
+
+        flt_lay.addWidget(QLabel("Mês:"))
+        self._flt_mes = QComboBox(); self._flt_mes.setFixedWidth(130)
+        self._flt_mes.currentTextChanged.connect(self._aplicar_filtro)
+        flt_lay.addWidget(self._flt_mes)
+
+        btn_limpar_flt = _btn("✕ Limpar", "#757575", self._limpar_filtros, 80)
+        flt_lay.addWidget(btn_limpar_flt)
+        flt_lay.addStretch()
+
+        # somatória filtrada
+        self._lbl_soma = QLabel("Soma: R$ 0,00")
+        self._lbl_soma.setStyleSheet("font-weight:bold; font-size:11px; padding: 0 8px")
+        flt_lay.addWidget(self._lbl_soma)
+        root.addWidget(flt_grp)
+
+        # ── tabela ────────────────────────────────────────
+        self._table = QTableWidget(0, len(COLS_DADOS))
+        self._table.setHorizontalHeaderLabels(COLS_DADOS)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
-        self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        self._table.horizontalHeader().setStretchLastSection(True)
-        self._table.setColumnWidth(0, 40)
-        self._table.setColumnWidth(1, 130)
-        self._table.setColumnWidth(2, 40)
-        self._table.setColumnWidth(3, 50)
-        self._table.setColumnWidth(4, 110)
-        self._table.setColumnWidth(5, 100)
-        self._table.setColumnWidth(6, 140)
-        self._table.setColumnWidth(7, 160)
+        hdr = self._table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.Interactive)
+        hdr.setStretchLastSection(False)
+        hdr.setSortIndicatorShown(True)
+        self._table.setSortingEnabled(True)          # ← classificação por coluna
         self._table.itemSelectionChanged.connect(self._on_select)
         root.addWidget(self._table, 1)
 
         self._status = QLabel("")
+        self._status.setStyleSheet("color:#555; font-size:10px")
         root.addWidget(self._status)
+
         self._carregar()
 
-    # ── ações ─────────────────────────────────────────────
-    def _dados(self):
-        return {k: w.text().strip() for k, w in self._campos.items()}
+    # ── campos helpers ────────────────────────────────────
+    def _get_text(self, key) -> str:
+        w = self._campos[key]
+        if isinstance(w, QComboBox):
+            return w.currentText().strip()
+        return w.text().strip()
 
+    def _set_text(self, key, val):
+        w = self._campos[key]
+        if isinstance(w, QComboBox):
+            idx = w.findText(val)
+            if idx >= 0:
+                w.setCurrentIndex(idx)
+            else:
+                w.setCurrentText(val)
+        else:
+            w.setText(val)
+
+    def _clear_field(self, key):
+        w = self._campos[key]
+        if isinstance(w, QComboBox):
+            w.setCurrentIndex(-1)
+            w.clearEditText()
+        else:
+            w.clear()
+
+    def _atualizar_combos(self):
+        """Recarrega listas de Categoria e Sub_Categoria a partir do banco."""
+        for key, campo in [("Categoria", "Categoria"), ("Sub_Categoria", "Sub_Categoria")]:
+            vals = buscar_distintos(campo)
+            w = self._campos[key]
+            cur = w.currentText()
+            w.blockSignals(True)
+            w.clear()
+            w.addItems(vals)
+            w.setCurrentText(cur)
+            w.blockSignals(False)
+            if w.completer():
+                w.completer().setModel(QStringListModel(vals, w.completer()))
+
+    def _atualizar_filtros_combo(self):
+        anos  = ["(todos)"] + sorted(set(
+            str(r[3]) for r in self._all_rows if r[3] is not None))
+        meses = ["(todos)"] + [f"{i} – {NOMES_MESES[i]}" for i in range(1, 13)]
+        for cb, vals in ((self._flt_ano, anos), (self._flt_mes, meses)):
+            cur = cb.currentText()
+            cb.blockSignals(True)
+            cb.clear(); cb.addItems(vals)
+            idx = cb.findText(cur)
+            cb.setCurrentIndex(idx if idx >= 0 else 0)
+            cb.blockSignals(False)
+
+    # ── ações formulário ──────────────────────────────────
     def _salvar(self):
-        row = self._dados()
+        row = {k: self._get_text(k) for k in self._campos}
         if not row["Data"]:
             QMessageBox.warning(self, "Atenção", "Data é obrigatória.")
             return
@@ -326,52 +436,102 @@ class AbaForm(QWidget):
         self._carregar()
 
     def _limpar(self):
-        for w in self._campos.values():
-            w.clear()
+        for key in self._campos:
+            self._clear_field(key)
         self._edit_id = None
         self._btn_salvar.setText("Salvar")
 
     def _excluir(self):
-        rows = self._table.selectionModel().selectedRows()
-        if not rows:
+        sel = self._table.selectionModel().selectedRows()
+        if not sel:
             QMessageBox.information(self, "Info", "Selecione um registro para excluir.")
             return
         if QMessageBox.question(self, "Confirmar", "Excluir registro selecionado?",
                                 QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
-            rid = int(self._table.item(rows[0].row(), 0).text())
+            rid = int(self._table.item(sel[0].row(), 0).text())
             deletar(rid)
             self._limpar()
             self._carregar()
 
     def _on_select(self):
-        rows = self._table.selectionModel().selectedRows()
-        if not rows:
+        sel = self._table.selectionModel().selectedRows()
+        if not sel:
             return
-        r = rows[0].row()
+        r = sel[0].row()
         self._edit_id = int(self._table.item(r, 0).text())
-        self._campos["Data"].setText(self._table.item(r, 1).text())
-        self._campos["Categoria"].setText(self._table.item(r, 4).text())
-        self._campos["Sub_Categoria"].setText(self._table.item(r, 5).text())
-        self._campos["Transacao"].setText(self._table.item(r, 6).text())
-        self._campos["Descricao"].setText(self._table.item(r, 7).text())
-        self._campos["Valor"].setText(
-            str(self._table.item(r, 8).data(Qt.UserRole) or ""))
+        self._set_text("Data",          self._table.item(r, 1).text())
+        self._set_text("Categoria",     self._table.item(r, 4).text())
+        self._set_text("Sub_Categoria", self._table.item(r, 5).text())
+        self._set_text("Transacao",     self._table.item(r, 6).text())
+        self._set_text("Descricao",     self._table.item(r, 7).text())
+        raw = self._table.item(r, 8).data(Qt.UserRole)
+        self._set_text("Valor", str(raw) if raw is not None else "")
         self._btn_salvar.setText("Atualizar")
 
-    def _carregar(self):
-        cols, rows = buscar_todos()
+    # ── filtros ───────────────────────────────────────────
+    def _limpar_filtros(self):
+        for ed in self._flt_widgets.values():
+            ed.blockSignals(True); ed.clear(); ed.blockSignals(False)
+        self._flt_ano.blockSignals(True)
+        self._flt_ano.setCurrentIndex(0)
+        self._flt_ano.blockSignals(False)
+        self._flt_mes.blockSignals(True)
+        self._flt_mes.setCurrentIndex(0)
+        self._flt_mes.blockSignals(False)
+        self._aplicar_filtro()
+
+    def _aplicar_filtro(self):
+        f_cat  = self._flt_widgets["cat"].text().lower()
+        f_sub  = self._flt_widgets["sub"].text().lower()
+        f_tran = self._flt_widgets["tran"].text().lower()
+        f_desc = self._flt_widgets["desc"].text().lower()
+        f_ano  = self._flt_ano.currentText()
+        f_mes  = self._flt_mes.currentText()
+        num_mes = int(f_mes.split(" – ")[0]) if f_mes != "(todos)" and " – " in f_mes else None
+        num_ano = int(f_ano) if f_ano not in ("", "(todos)") else None
+
+        self._table.setSortingEnabled(False)
         self._table.setRowCount(0)
-        for i, r in enumerate(rows):
+        soma = 0.0
+        vis = 0
+        for r in self._all_rows:
+            # r = (id, Data, Mes, Ano, Categoria, Sub_Categoria, Transacao, Descricao, Valor)
+            if f_cat  and f_cat  not in str(r[4]).lower(): continue
+            if f_sub  and f_sub  not in str(r[5]).lower(): continue
+            if f_tran and f_tran not in str(r[6]).lower(): continue
+            if f_desc and f_desc not in str(r[7]).lower(): continue
+            if num_ano is not None and r[3] != num_ano:    continue
+            if num_mes is not None and r[2] != num_mes:    continue
+            i = self._table.rowCount()
             self._table.insertRow(i)
             for j, v in enumerate(r):
-                if j == 8:   # Valor
-                    it = item_valor(v)
-                    it.setData(Qt.UserRole, v)
+                if j == 8:
+                    it = item_valor(v); it.setData(Qt.UserRole, v)
                 else:
                     it = QTableWidgetItem(str(v) if v is not None else "")
                     it.setTextAlignment(Qt.AlignCenter)
                 self._table.setItem(i, j, it)
-        self._status.setText(f"{len(rows)} registros")
+            soma += float(r[8] or 0)
+            vis += 1
+        self._table.setSortingEnabled(True)
+        self._table.resizeColumnsToContents()           # ← auto-ajuste
+        self._lbl_soma.setText(f"Soma: {fmt_valor(soma)}")
+        self._lbl_soma.setStyleSheet(
+            f"font-weight:bold;font-size:11px;padding:0 8px;"
+            f"color:{'#c62828' if soma < 0 else '#1b5e20'}")
+        total = len(self._all_rows)
+        self._status.setText(
+            f"Exibindo {vis} de {total} registros" +
+            (f"  |  Soma filtrada: {fmt_valor(soma)}" if vis < total else
+             f"  |  Total: {total} registros"))
+
+    # ── carga ─────────────────────────────────────────────
+    def _carregar(self):
+        _, rows = buscar_todos()
+        self._all_rows = rows
+        self._atualizar_combos()
+        self._atualizar_filtros_combo()
+        self._aplicar_filtro()
 
     def refresh(self):
         self._carregar()
@@ -423,10 +583,7 @@ class AbaImport(QWidget):
         root.addWidget(grp_modo)
 
         # botão
-        btn_imp = QPushButton("Importar")
-        btn_imp.setFixedHeight(36)
-        btn_imp.setStyleSheet("background:#4CAF50;color:white;font-weight:bold;font-size:13px;border-radius:4px")
-        btn_imp.clicked.connect(self._importar)
+        btn_imp = _btn("Importar", "#4CAF50", self._importar, 120)
         root.addWidget(btn_imp)
 
         self._status = QLabel("")
@@ -581,24 +738,9 @@ class AbaPivot(QWidget):
 
         # ── botões ────────────────────────────────────────
         btn_row = QHBoxLayout()
-        btn_gerar = QPushButton("▶  Gerar Tabela")
-        btn_gerar.setFixedHeight(34)
-        btn_gerar.setStyleSheet("background:#4CAF50;color:white;font-weight:bold;font-size:12px;border-radius:4px;padding:0 12px")
-        btn_gerar.clicked.connect(self._gerar)
-
-        btn_exp = QPushButton("Exportar XLSX")
-        btn_exp.setFixedHeight(34)
-        btn_exp.setStyleSheet("background:#1565C0;color:white;font-size:12px;border-radius:4px;padding:0 12px")
-        btn_exp.clicked.connect(self._exportar)
-
-        btn_upd = QPushButton("↺  Atualizar Filtros")
-        btn_upd.setFixedHeight(34)
-        btn_upd.setStyleSheet("background:#757575;color:white;font-size:12px;border-radius:4px;padding:0 12px")
-        btn_upd.clicked.connect(self._atualizar_filtros)
-
-        btn_row.addWidget(btn_gerar)
-        btn_row.addWidget(btn_exp)
-        btn_row.addWidget(btn_upd)
+        btn_row.addWidget(_btn("▶  Gerar Tabela",     "#4CAF50", self._gerar,             130))
+        btn_row.addWidget(_btn("Exportar XLSX",       "#1565C0", self._exportar,          120))
+        btn_row.addWidget(_btn("↺  Atualizar Filtros","#757575", self._atualizar_filtros, 140))
         btn_row.addStretch()
         root.addLayout(btn_row)
 
@@ -784,6 +926,10 @@ class AbaPivot(QWidget):
             export_rows.append(["Total Geral"] + gt_strs)
 
         self._export_rows = export_rows
+        # auto-ajuste da coluna de rótulo; demais via ResizeToContents
+        self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for c in range(1, len(hdrs)):
+            self._tree.header().setSectionResizeMode(c, QHeaderView.ResizeToContents)
         self._status.setText(
             f"{len(grupos)} grupos  |  {len(df)} registros  |  agreg: {agg}"
             + ("  —  clique no ▶ para expandir" if use_row2 else ""))

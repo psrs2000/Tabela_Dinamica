@@ -334,18 +334,6 @@ class AbaForm(QWidget):
         flt_lay.addStretch()
         root.addWidget(flt_grp)
 
-        # ── faixa acima da tabela com soma à direita ──────
-        pre_table = QHBoxLayout()
-        pre_table.setContentsMargins(0, 0, 0, 0)
-        pre_table.addStretch()
-        self._lbl_soma = QLabel("Soma: R$ 0,00")
-        self._lbl_soma.setStyleSheet(
-            "font-weight:bold; font-size:14px; color:#c62828;"
-            "padding:1px 6px;")
-        self._lbl_soma.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        pre_table.addWidget(self._lbl_soma)
-        root.addLayout(pre_table)
-
         # ── tabela ────────────────────────────────────────
         self._table = QTableWidget(0, len(COLS_DADOS))
         self._table.setHorizontalHeaderLabels(COLS_DADOS)
@@ -524,16 +512,16 @@ class AbaForm(QWidget):
             soma += float(r[8] or 0)
             vis += 1
         self._table.setSortingEnabled(True)
-        self._table.resizeColumnsToContents()           # ← auto-ajuste
-        self._lbl_soma.setText(f"Soma: {fmt_valor(soma)}")
-        self._lbl_soma.setStyleSheet(
-            f"font-weight:bold; font-size:14px; padding:1px 6px;"
-            f"color:{'#c62828' if soma < 0 else '#1b5e20'};")
+        self._table.resizeColumnsToContents()
+        # atualiza cabeçalho da coluna Valor com a soma
+        cor_hex = "#c62828" if soma < 0 else "#1b5e20"
+        hdr_item = self._table.horizontalHeaderItem(8)
+        hdr_item.setText(f"Valor  |  {fmt_valor(soma)}")
+        hdr_item.setForeground(QBrush(QColor(cor_hex)))
         total = len(self._all_rows)
         self._status.setText(
             f"Exibindo {vis} de {total} registros" +
-            (f"  |  Soma filtrada: {fmt_valor(soma)}" if vis < total else
-             f"  |  Total: {total} registros"))
+            (f"  |  filtro ativo" if vis < total else ""))
 
     # ── carga ─────────────────────────────────────────────
     def _carregar(self):

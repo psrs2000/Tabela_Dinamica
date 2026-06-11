@@ -28,7 +28,28 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QSize, QSortFilterProxyModel, QStringListModel
 from PyQt5.QtGui import QColor, QBrush, QFont, QPalette
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dados.db")
+DB_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dados.db")
+CFG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+
+def cfg_load() -> dict:
+    try:
+        import json
+        with open(CFG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def cfg_save(data: dict):
+    import json
+    try:
+        existing = cfg_load()
+        existing.update(data)
+        with open(CFG_PATH, "w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=2)
+    except Exception:
+        pass
 
 NOMES_MESES = {
     1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
@@ -347,6 +368,8 @@ class AbaForm(QWidget):
         hdr.setSortIndicatorShown(True)
         self._table.setSortingEnabled(True)
         self._table.itemSelectionChanged.connect(self._on_select)
+        # salva larguras automaticamente quando o usuário arrastar uma coluna
+        hdr.sectionResized.connect(self._salvar_layout)
         root.addWidget(self._table, 1)
 
         # ── rodapé: status ────────────────────────────────
@@ -533,6 +556,7 @@ class AbaForm(QWidget):
             cur_w = hdr.sectionSize(col)
             if hdr_w > cur_w:
                 hdr.resizeSection(col, hdr_w)
+        self._restaurar_layout()   # se houver layout salvo, sobrepõe o auto-ajuste
         total = len(self._all_rows)
         self._status.setText(
             f"Exibindo {vis} de {total} registros" +
@@ -545,6 +569,25 @@ class AbaForm(QWidget):
         self._atualizar_combos()
         self._atualizar_filtros_combo()
         self._aplicar_filtro()
+
+    # ── layout de colunas ─────────────────────────────────
+    def _salvar_layout(self):
+        """Chamado automaticamente ao arrastar qualquer coluna."""
+        widths = [self._table.columnWidth(c)
+                  for c in range(self._table.columnCount())]
+        cfg_save({"dados_col_widths": widths})
+
+    def _restaurar_layout(self):
+        """Aplica larguras salvas; chamado após auto-ajuste inicial."""
+        widths = cfg_load().get("dados_col_widths")
+        if not widths or len(widths) != self._table.columnCount():
+            return
+        # bloqueia o sinal para não re-salvar durante a restauração
+        hdr = self._table.horizontalHeader()
+        hdr.sectionResized.disconnect(self._salvar_layout)
+        for c, w in enumerate(widths):
+            self._table.setColumnWidth(c, w)
+        hdr.sectionResized.connect(self._salvar_layout)
 
     # ── exportação ────────────────────────────────────────
     def _linhas_visiveis(self):

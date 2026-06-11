@@ -546,17 +546,24 @@ class AbaForm(QWidget):
         hdr_item = self._table.horizontalHeaderItem(8)
         hdr_item.setText(f"Valor  |  {fmt_valor(soma)}")
         hdr_item.setForeground(QBrush(QColor(cor_hex)))
-        # auto-ajuste: considera conteúdo E cabeçalho de cada coluna
-        self._table.resizeColumnsToContents()
         hdr = self._table.horizontalHeader()
-        fm = self._table.fontMetrics()
-        for col in range(self._table.columnCount()):
-            hdr_txt = self._table.horizontalHeaderItem(col)
-            hdr_w = fm.horizontalAdvance(hdr_txt.text() if hdr_txt else "") + 24
-            cur_w = hdr.sectionSize(col)
-            if hdr_w > cur_w:
-                hdr.resizeSection(col, hdr_w)
-        self._restaurar_layout()   # se houver layout salvo, sobrepõe o auto-ajuste
+        # bloqueia sinal para que o auto-ajuste NÃO sobrescreva o config salvo
+        hdr.sectionResized.disconnect(self._salvar_layout)
+        saved = cfg_load().get("dados_col_widths")
+        if saved and len(saved) == self._table.columnCount():
+            # layout salvo pelo usuário: restaura direto, ignora auto-ajuste
+            for c, w in enumerate(saved):
+                self._table.setColumnWidth(c, w)
+        else:
+            # sem layout salvo: aplica auto-ajuste por conteúdo + cabeçalho
+            self._table.resizeColumnsToContents()
+            fm = self._table.fontMetrics()
+            for col in range(self._table.columnCount()):
+                hdr_txt = self._table.horizontalHeaderItem(col)
+                hdr_w = fm.horizontalAdvance(hdr_txt.text() if hdr_txt else "") + 24
+                if hdr_w > hdr.sectionSize(col):
+                    hdr.resizeSection(col, hdr_w)
+        hdr.sectionResized.connect(self._salvar_layout)
         total = len(self._all_rows)
         self._status.setText(
             f"Exibindo {vis} de {total} registros" +
@@ -577,17 +584,6 @@ class AbaForm(QWidget):
                   for c in range(self._table.columnCount())]
         cfg_save({"dados_col_widths": widths})
 
-    def _restaurar_layout(self):
-        """Aplica larguras salvas; chamado após auto-ajuste inicial."""
-        widths = cfg_load().get("dados_col_widths")
-        if not widths or len(widths) != self._table.columnCount():
-            return
-        # bloqueia o sinal para não re-salvar durante a restauração
-        hdr = self._table.horizontalHeader()
-        hdr.sectionResized.disconnect(self._salvar_layout)
-        for c, w in enumerate(widths):
-            self._table.setColumnWidth(c, w)
-        hdr.sectionResized.connect(self._salvar_layout)
 
     # ── exportação ────────────────────────────────────────
     def _linhas_visiveis(self):

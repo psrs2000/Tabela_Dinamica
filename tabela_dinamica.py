@@ -266,7 +266,7 @@ class AbaForm(QWidget):
             ("Data",          "Data (dd/mm/aaaa hh:mm:ss)", False),
             ("Categoria",     "Categoria",                   True),
             ("Sub_Categoria", "Sub-Categoria",               True),
-            ("Transacao",     "Transação",                   False),
+            ("Transacao",     "Transação",                   True),
             ("Descricao",     "Descrição",                   False),
             ("Valor",         "Valor",                       False),
         ]
@@ -354,7 +354,12 @@ class AbaForm(QWidget):
         self._status.setStyleSheet("color:#555; font-size:10px")
         root.addWidget(self._status)
 
-        self._carregar()
+        # ── exportação da aba Dados ───────────────────────
+        exp_row = QHBoxLayout()
+        exp_row.addStretch()
+        exp_row.addWidget(_btn("Exportar XLSX", "#1565C0", self._exportar_xlsx, 130))
+        exp_row.addWidget(_btn("Exportar CSV",  "#6A1B9A", self._exportar_csv,  120))
+        root.addLayout(exp_row)
 
         self._carregar()
 
@@ -385,8 +390,9 @@ class AbaForm(QWidget):
             w.clear()
 
     def _atualizar_combos(self):
-        """Recarrega listas de Categoria e Sub_Categoria a partir do banco."""
-        for key, campo in [("Categoria", "Categoria"), ("Sub_Categoria", "Sub_Categoria")]:
+        """Recarrega listas de Categoria, Sub_Categoria e Transacao a partir do banco."""
+        for key, campo in [("Categoria", "Categoria"), ("Sub_Categoria", "Sub_Categoria"),
+                           ("Transacao", "Transacao")]:
             vals = buscar_distintos(campo)
             w = self._campos[key]
             cur = w.currentText()
@@ -530,6 +536,67 @@ class AbaForm(QWidget):
         self._atualizar_combos()
         self._atualizar_filtros_combo()
         self._aplicar_filtro()
+
+    # ── exportação ────────────────────────────────────────
+    def _linhas_visiveis(self):
+        """Retorna os dados das linhas atualmente visíveis na tabela."""
+        rows = []
+        for i in range(self._table.rowCount()):
+            row = []
+            for j in range(self._table.columnCount()):
+                it = self._table.item(i, j)
+                row.append(it.text() if it else "")
+            rows.append(row)
+        return rows
+
+    def _exportar_xlsx(self):
+        if not OPENPYXL_OK:
+            QMessageBox.critical(self, "Erro",
+                "openpyxl não instalado.\nExecute: pip install openpyxl")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Exportar como XLSX", "", "Excel (*.xlsx)")
+        if not path:
+            return
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Dados"
+        # cabeçalho (sem a soma no texto)
+        hdrs = [COLS_DADOS[i] if i != 8 else "Valor"
+                for i in range(len(COLS_DADOS))]
+        for c, h in enumerate(hdrs, 1):
+            cell = ws.cell(row=1, column=c, value=h)
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="4472C4")
+            cell.alignment = Alignment(horizontal="center")
+        for r, row in enumerate(self._linhas_visiveis(), 2):
+            for c, val in enumerate(row, 1):
+                cell = ws.cell(row=r, column=c, value=val)
+                cell.alignment = Alignment(
+                    horizontal="right" if c == len(hdrs) else "center")
+        for col in ws.columns:
+            w = max((len(str(c.value or "")) for c in col), default=8)
+            ws.column_dimensions[col[0].column_letter].width = min(w + 2, 40)
+        wb.save(path)
+        QMessageBox.information(self, "Sucesso",
+            f"{self._table.rowCount()} registros exportados para:\n{path}")
+
+    def _exportar_csv(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Exportar como CSV", "", "CSV (*.csv)")
+        if not path:
+            return
+        import csv
+        hdrs = [COLS_DADOS[i] if i != 8 else "Valor"
+                for i in range(len(COLS_DADOS))]
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f, delimiter=";")
+            writer.writerow(hdrs)
+            writer.writerows(self._linhas_visiveis())
+        QMessageBox.information(self, "Sucesso",
+            f"{self._table.rowCount()} registros exportados para:\n{path}")
 
     def refresh(self):
         self._carregar()
@@ -736,9 +803,13 @@ class AbaPivot(QWidget):
 
         # ── botões ────────────────────────────────────────
         btn_row = QHBoxLayout()
-        btn_row.addWidget(_btn("▶  Gerar Tabela",     "#4CAF50", self._gerar,             130))
-        btn_row.addWidget(_btn("Exportar XLSX",       "#1565C0", self._exportar,          120))
-        btn_row.addWidget(_btn("↺  Atualizar Filtros","#757575", self._atualizar_filtros, 140))
+        btn_gerar = _btn("▶  Gerar Tabela", "#4CAF50", self._gerar, 180)
+        btn_gerar.setStyleSheet(
+            "QPushButton{background:#4CAF50;color:white;border-radius:6px;"
+            "padding:10px 28px;font-weight:bold;font-size:14px;}"
+            "QPushButton:hover{background:#43A047;}"
+        )
+        btn_row.addWidget(btn_gerar)
         btn_row.addStretch()
         root.addLayout(btn_row)
 

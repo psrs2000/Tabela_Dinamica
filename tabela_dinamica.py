@@ -345,7 +345,7 @@ class AbaForm(QWidget):
             else:
                 w = QLineEdit()
                 if key == "Descricao":
-                    w.setMinimumWidth(780)
+                    w.setMinimumWidth(450)
             form.addWidget(w, row_idx, 1, Qt.AlignLeft)
             self._campos[key] = w
 
@@ -792,7 +792,7 @@ class AbaImport(QWidget):
         # ── modo de importação (label + radio buttons centrados) ──
         modo_lbl = QLabel("Modo de importação:")
         modo_lbl.setAlignment(Qt.AlignCenter)
-        modo_lbl.setStyleSheet("font-weight:bold; font-size:13px; margin-top:4px;")
+        modo_lbl.setStyleSheet("font-weight:bold; font-size:15px; margin-top:4px;")
         root.addWidget(modo_lbl)
 
         radio_container = QWidget()
@@ -800,7 +800,7 @@ class AbaImport(QWidget):
         radio_layout.setContentsMargins(0, 0, 0, 0)
         self._rb_add = QRadioButton("Acrescentar ao banco existente")
         self._rb_ow  = QRadioButton("Sobrescrever banco (apaga tudo antes)")
-        self._rb_ow.setStyleSheet("color:#c62828; font-size:12px; font-weight:bold")
+        self._rb_ow.setStyleSheet("color:#c62828; font-size:15px; font-weight:bold")
         self._rb_add.setChecked(True)
         radio_layout.addStretch()
         radio_layout.addWidget(self._rb_add)

@@ -984,7 +984,8 @@ class AbaPivot(QWidget):
             return None
         cols, rows = buscar_todos()
         if not rows:
-            return pd.DataFrame()
+            return pd.DataFrame(columns=["id","Data","Mes","Ano","Categoria",
+                                         "Sub_Categoria","Transacao","Descricao","Valor"])
         df = pd.DataFrame(rows, columns=cols)
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0)
         df["Mes"]   = pd.to_numeric(df["Mes"],   errors="coerce")

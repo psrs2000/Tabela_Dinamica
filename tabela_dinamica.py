@@ -91,6 +91,15 @@ def init_db():
         )
     """)
     con.commit()
+    # garante que o banco nunca fica vazio (evita crash no pandas/Qt)
+    cur = con.execute("SELECT COUNT(*) FROM registros")
+    if cur.fetchone()[0] == 0:
+        con.execute(
+            "INSERT INTO registros (Data,Mes,Ano,Categoria,Sub_Categoria,Transacao,Descricao,Valor)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            ("01/01/1900", 1, 1900, "", "", "", "", 0.0)
+        )
+        con.commit()
     con.close()
 
 
@@ -146,10 +155,22 @@ def atualizar(rid, row: dict):
     con.close()
 
 
+def _inserir_dummy(con):
+    con.execute(
+        "INSERT INTO registros (Data,Mes,Ano,Categoria,Sub_Categoria,Transacao,Descricao,Valor)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        ("01/01/1900", 1, 1900, "", "", "", "", 0.0)
+    )
+
+
 def deletar(rid):
     con = sqlite3.connect(DB_PATH)
     con.execute("DELETE FROM registros WHERE id=?", (rid,))
     con.commit()
+    cur = con.execute("SELECT COUNT(*) FROM registros")
+    if cur.fetchone()[0] == 0:
+        _inserir_dummy(con)
+        con.commit()
     con.close()
 
 
@@ -165,6 +186,7 @@ def buscar_todos():
 def apagar_banco():
     con = sqlite3.connect(DB_PATH)
     con.execute("DELETE FROM registros")
+    _inserir_dummy(con)
     con.commit()
     con.close()
 

@@ -961,9 +961,10 @@ class AbaPivot(QWidget):
         lay_str.addWidget(self._chk_total, 1, 5, 1, 2)
         root.addWidget(grp_str)
 
-        # sets de exclusão (populados dinamicamente)
+        # sets de exclusão e estado de expansão (populados dinamicamente)
         self._excluidos1 = set()
         self._excluidos2 = set()
+        self._expandidos = set()  # nomes dos grupos expandidos
 
         # ── filtros ───────────────────────────────────────
         grp_flt = QGroupBox("Filtros de Relatório")
@@ -1025,6 +1026,11 @@ class AbaPivot(QWidget):
             cb.currentIndexChanged.connect(self._gerar)
         for chk in (self._chk_sub, self._chk_total):
             chk.stateChanged.connect(self._gerar)
+
+        self._tree.itemExpanded.connect(
+            lambda item: self._on_expansao(item, True))
+        self._tree.itemCollapsed.connect(
+            lambda item: self._on_expansao(item, False))
 
         self._atualizar_filtros()
         self._restaurar_config_pivot()
@@ -1100,9 +1106,23 @@ class AbaPivot(QWidget):
                 self._excluidos1 = set(cfg["excluidos1"])
             if "excluidos2" in cfg:
                 self._excluidos2 = set(cfg["excluidos2"])
+            if "expandidos" in cfg:
+                self._expandidos = set(cfg["expandidos"])
         finally:
             for w in widgets:
                 w.blockSignals(False)
+
+    # ── estado de expansão dos grupos ────────────────────
+    def _on_expansao(self, item: QTreeWidgetItem, expandido: bool):
+        nome = item.text(0)
+        if expandido:
+            self._expandidos.add(nome)
+        else:
+            self._expandidos.discard(nome)
+        cfg_save({"pivot_config": {
+            **cfg_load().get("pivot_config", {}),
+            "expandidos": list(self._expandidos),
+        }})
 
     # ── menu de exclusão de itens ─────────────────────────
     def _abrir_menu_exclusao(self, linha: int):
@@ -1266,7 +1286,8 @@ class AbaPivot(QWidget):
                     export_rows.append(["  " + str(sg)] + sg_strs)
 
             self._tree.addTopLevelItem(parent)
-            parent.setExpanded(False)   # recolhido por padrão
+            # restaurar estado expandido salvo; padrão: recolhido
+            parent.setExpanded(str(g) in self._expandidos)
 
         # Total Geral
         if self._chk_total.isChecked():
@@ -1308,6 +1329,7 @@ class AbaPivot(QWidget):
             "f_sub":       self._f_sub.currentText(),
             "excluidos1":  list(self._excluidos1),
             "excluidos2":  list(self._excluidos2),
+            "expandidos":  list(self._expandidos),
         }})
 
     # ── exportar ──────────────────────────────────────────

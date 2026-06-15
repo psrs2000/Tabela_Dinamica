@@ -959,6 +959,8 @@ class AbaPivot(QWidget):
         lay_str.addWidget(self._chk_sub, 1, 3, 1, 2)
         self._chk_total = QCheckBox("Total Geral"); self._chk_total.setChecked(True)
         lay_str.addWidget(self._chk_total, 1, 5, 1, 2)
+        self._chk_pct = QCheckBox("Mostrar como %"); self._chk_pct.setChecked(False)
+        lay_str.addWidget(self._chk_pct, 1, 7)
         root.addWidget(grp_str)
 
         # sets de exclusão e estado de expansão (populados dinamicamente)
@@ -1024,7 +1026,7 @@ class AbaPivot(QWidget):
         for cb in (self._row1, self._row2, self._cols, self._agg,
                    self._f_ano, self._f_mes, self._f_cat, self._f_tran, self._f_sub):
             cb.currentIndexChanged.connect(self._gerar)
-        for chk in (self._chk_sub, self._chk_total):
+        for chk in (self._chk_sub, self._chk_total, self._chk_pct):
             chk.stateChanged.connect(self._gerar)
 
         self._tree.itemExpanded.connect(
@@ -1083,7 +1085,7 @@ class AbaPivot(QWidget):
         # block signals during restore to avoid multiple _gerar calls
         widgets = [self._row1, self._row2, self._cols, self._agg,
                    self._f_ano, self._f_mes, self._f_cat, self._f_tran, self._f_sub,
-                   self._chk_sub, self._chk_total]
+                   self._chk_sub, self._chk_total, self._chk_pct]
         for w in widgets:
             w.blockSignals(True)
         try:
@@ -1102,6 +1104,8 @@ class AbaPivot(QWidget):
                 self._chk_sub.setChecked(bool(cfg["subtotais"]))
             if "total_geral" in cfg:
                 self._chk_total.setChecked(bool(cfg["total_geral"]))
+            if "mostrar_pct" in cfg:
+                self._chk_pct.setChecked(bool(cfg["mostrar_pct"]))
             if "excluidos1" in cfg:
                 self._excluidos1 = set(cfg["excluidos1"])
             if "excluidos2" in cfg:
@@ -1244,18 +1248,46 @@ class AbaPivot(QWidget):
         font_bold = QFont("Segoe UI", 11, QFont.Bold)
         font_reg  = QFont("Segoe UI", 11)
 
-        export_rows = [hdrs]
+        usar_pct = self._chk_pct.isChecked()
+
+        # ── 1ª passagem: calcular todos os valores e o total geral ──
         grand = {str(cv): 0.0 for cv in col_vals}
         grupos = sorted(df[row1].dropna().unique().tolist())
-
+        dados_grupos = []
         for g in grupos:
             g_df  = df[df[row1] == g]
             g_cv  = vals_por_col(g_df)
             g_tot = soma_d(g_cv)
             for k in grand: grand[k] += g_cv.get(k, 0.0)
+            subgrupos_dados = []
+            if use_row2:
+                for sg in sorted(g_df[row2].dropna().unique().tolist()):
+                    sg_df = g_df[g_df[row2] == sg]
+                    sg_cv = vals_por_col(sg_df)
+                    sg_tot = soma_d(sg_cv)
+                    subgrupos_dados.append((sg, sg_cv, sg_tot))
+            dados_grupos.append((g, g_cv, g_tot, subgrupos_dados))
 
-            # nó pai (grupo / subtotal)
-            g_strs = [fmt_valor(g_cv.get(str(cv), 0)) for cv in col_vals] + [fmt_valor(g_tot)]
+        gt_tot = soma_d(grand)
+
+        def fmt_cel(v, is_total_geral_cell=False):
+            """Formata célula em valor ou %."""
+            if not usar_pct:
+                return fmt_valor(v)
+            if is_total_geral_cell:
+                return "100,00%"
+            base = abs(gt_tot) if gt_tot != 0 else 1.0
+            return f"{v / base * 100:.2f}%".replace(".", ",")
+
+        def cor_cel(v):
+            return cor_valor(v)
+
+        # ── 2ª passagem: montar a árvore ─────────────────────
+        export_rows = [hdrs]
+
+        for g, g_cv, g_tot, subgrupos_dados in dados_grupos:
+            g_strs = [fmt_cel(g_cv.get(str(cv), 0)) for cv in col_vals] + \
+                     [fmt_cel(g_tot, usar_pct and g_tot == gt_tot)]
             parent = QTreeWidgetItem([str(g)] + g_strs)
             parent.setFont(0, font_bold)
             parent.setBackground(0, QBrush(BG_GRUPO))
@@ -1263,36 +1295,30 @@ class AbaPivot(QWidget):
                 parent.setFont(c, font_bold)
                 parent.setBackground(c, QBrush(BG_GRUPO))
                 v = g_cv.get(str(col_vals[c-1]), g_tot) if c < len(hdrs)-1 else g_tot
-                parent.setForeground(c, QBrush(cor_valor(v)))
+                parent.setForeground(c, QBrush(cor_cel(v)))
                 parent.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter)
             export_rows.append([str(g)] + g_strs)
 
-            if use_row2:
-                subgrupos = sorted(g_df[row2].dropna().unique().tolist())
-                for sg in subgrupos:
-                    sg_df  = g_df[g_df[row2] == sg]
-                    sg_cv  = vals_por_col(sg_df)
-                    sg_tot = soma_d(sg_cv)
-                    sg_strs = [fmt_valor(sg_cv.get(str(cv), 0)) for cv in col_vals] + \
-                              [fmt_valor(sg_tot)]
-                    child = QTreeWidgetItem([str(sg)] + sg_strs)
-                    child.setFont(0, font_reg)
-                    for c in range(1, len(hdrs)):
-                        child.setFont(c, font_reg)
-                        v = sg_cv.get(str(col_vals[c-1]), sg_tot) if c < len(hdrs)-1 else sg_tot
-                        child.setForeground(c, QBrush(cor_valor(v)))
-                        child.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter)
-                    parent.addChild(child)
-                    export_rows.append(["  " + str(sg)] + sg_strs)
+            for sg, sg_cv, sg_tot in subgrupos_dados:
+                sg_strs = [fmt_cel(sg_cv.get(str(cv), 0)) for cv in col_vals] + \
+                          [fmt_cel(sg_tot)]
+                child = QTreeWidgetItem([str(sg)] + sg_strs)
+                child.setFont(0, font_reg)
+                for c in range(1, len(hdrs)):
+                    child.setFont(c, font_reg)
+                    v = sg_cv.get(str(col_vals[c-1]), sg_tot) if c < len(hdrs)-1 else sg_tot
+                    child.setForeground(c, QBrush(cor_cel(v)))
+                    child.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter)
+                parent.addChild(child)
+                export_rows.append(["  " + str(sg)] + sg_strs)
 
             self._tree.addTopLevelItem(parent)
-            # restaurar estado expandido salvo; padrão: recolhido
             parent.setExpanded(str(g) in self._expandidos)
 
         # Total Geral
         if self._chk_total.isChecked():
-            gt_tot  = soma_d(grand)
-            gt_strs = [fmt_valor(grand.get(str(cv), 0)) for cv in col_vals] + [fmt_valor(gt_tot)]
+            gt_strs = [fmt_cel(grand.get(str(cv), 0)) for cv in col_vals] + \
+                      [fmt_cel(gt_tot, usar_pct)]
             total_item = QTreeWidgetItem(["Total Geral"] + gt_strs)
             total_item.setFont(0, font_bold)
             total_item.setBackground(0, QBrush(BG_TOTAL))
@@ -1300,7 +1326,7 @@ class AbaPivot(QWidget):
                 total_item.setFont(c, font_bold)
                 total_item.setBackground(c, QBrush(BG_TOTAL))
                 v = grand.get(str(col_vals[c-1]), gt_tot) if c < len(hdrs)-1 else gt_tot
-                total_item.setForeground(c, QBrush(cor_valor(v)))
+                total_item.setForeground(c, QBrush(cor_cel(v)))
                 total_item.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter)
             self._tree.addTopLevelItem(total_item)
             export_rows.append(["Total Geral"] + gt_strs)
@@ -1322,6 +1348,7 @@ class AbaPivot(QWidget):
             "agg":         self._agg.currentText(),
             "subtotais":   self._chk_sub.isChecked(),
             "total_geral": self._chk_total.isChecked(),
+            "mostrar_pct": self._chk_pct.isChecked(),
             "f_ano":       self._f_ano.currentText(),
             "f_mes":       self._f_mes.currentText(),
             "f_cat":       self._f_cat.currentText(),

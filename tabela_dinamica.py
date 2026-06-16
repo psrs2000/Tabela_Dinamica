@@ -26,7 +26,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView, QStatusBar, QFrame, QCompleter,
     QMenu, QWidgetAction,
 )
-from PyQt5.QtCore import Qt, QSize, QSortFilterProxyModel, QStringListModel
+from PyQt5.QtCore import Qt, QSize, QSortFilterProxyModel, QStringListModel, QEvent
 from PyQt5.QtGui import QColor, QBrush, QFont, QPalette
 
 def _app_dir() -> str:
@@ -1120,9 +1120,10 @@ class AbaPivot(QWidget):
         self._tree.header().setSectionResizeMode(QHeaderView.Interactive)
         self._tree.header().setSectionsClickable(True)
         self._tree.setFont(QFont("Segoe UI", 11))
-        self._tree.header().sectionClicked.connect(self._ordenar_por_coluna)
-        self._sort_col = -1   # coluna atual de ordenação
-        self._sort_asc = True  # direção
+        # event filter no header para capturar cliques em qualquer coluna
+        self._tree.header().installEventFilter(self)
+        self._sort_col = -1
+        self._sort_asc = True
         root.addWidget(self._tree, 1)
 
         self._status = QLabel("")
@@ -1284,25 +1285,34 @@ class AbaPivot(QWidget):
         else:          self._excluidos2.clear()
         self._gerar()
 
+    # ── event filter: detecta clique em qualquer coluna do cabeçalho ──
+    def eventFilter(self, obj, event):
+        if obj is self._tree.header() and event.type() == QEvent.MouseButtonRelease:
+            if event.button() == Qt.LeftButton:
+                col = self._tree.header().logicalIndexAt(event.pos())
+                if col >= 0:
+                    self._ordenar_por_coluna(col)
+            return True
+        return super().eventFilter(obj, event)
+
     # ── ordenação por clique no cabeçalho ────────────────
     def _ordenar_por_coluna(self, col: int):
         if getattr(self, "_sorting", False):
             return
         self._sorting = True
         try:
-            if col == 0:
-                self._sort_asc = not self._sort_asc if self._sort_col == col else True
-                self._sort_col = col
-                self._reordenar(col, alfa=True)
-            else:
-                self._sort_asc = not self._sort_asc if self._sort_col == col else False
-                self._sort_col = col
-                self._reordenar(col, alfa=False)
+            alfa = (col == 0)
+            self._sort_asc = (not self._sort_asc) if self._sort_col == col else (col == 0)
+            self._sort_col = col
+            self._reordenar(col, alfa=alfa)
             hdr = self._tree.header()
             hdr.blockSignals(True)
             hdr.setSortIndicatorShown(True)
             hdr.setSortIndicator(col, Qt.AscendingOrder if self._sort_asc else Qt.DescendingOrder)
             hdr.blockSignals(False)
+            direc = "crescente" if self._sort_asc else "decrescente"
+            nome_col = self._tree.headerItem().text(col)
+            self._status.setText(f"Ordenado por: {nome_col}  ({direc})")
         finally:
             self._sorting = False
 

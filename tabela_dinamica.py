@@ -1536,6 +1536,7 @@ class AbaDashboard(QWidget):
         "Mês":           "Mes",
         "Ano":           "Ano",
     }
+    DIMS_TEMPORAIS = {"Mês", "Ano"}
     # padrão: (dimensão, tipo)
     DEFAULTS = [
         ("Categoria",     "Saídas"),
@@ -1590,11 +1591,17 @@ class AbaDashboard(QWidget):
             cb_dim = QComboBox()
             cb_dim.addItems(list(self.DIMS.keys()))
             cb_dim.setCurrentText(dim_def)
-            cb_dim.currentIndexChanged.connect(self._preencher)
             cb_tipo = QComboBox()
             cb_tipo.addItems(["Saídas", "Entradas"])
             cb_tipo.setCurrentText(tipo_def)
             cb_tipo.setFixedWidth(100)
+            cb_tipo.setVisible(dim_def not in self.DIMS_TEMPORAIS)
+            cb_dim.currentIndexChanged.connect(
+                lambda _, c=cb_dim, ct=cb_tipo: (
+                    ct.setVisible(c.currentText() not in self.DIMS_TEMPORAIS),
+                    self._preencher()
+                )
+            )
             cb_tipo.currentIndexChanged.connect(self._preencher)
             ctrl.addWidget(cb_dim, 1)
             ctrl.addWidget(cb_tipo)
@@ -1639,6 +1646,18 @@ class AbaDashboard(QWidget):
         t.setAlternatingRowColors(True)
         t.setFont(QFont("Segoe UI", 10))
         return t
+
+    def _set_colunas_temporais(self, tbl, dim_nome):
+        tbl.setColumnCount(4)
+        tbl.setHorizontalHeaderLabels([dim_nome, "Entradas", "Saídas", "Saldo"])
+        tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for c in (1, 2, 3):
+            tbl.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
+
+    def _set_colunas_tipo(self, tbl, dim_nome):
+        tbl.setColumnCount(3)
+        tbl.setHorizontalHeaderLabels([dim_nome, "Total", "%"])
+        tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
 
     def atualizar(self):
         if not PANDAS_OK:
@@ -1691,9 +1710,15 @@ class AbaDashboard(QWidget):
         for grp, cb_dim, cb_tipo, tbl in self._paineis:
             dim_nome = cb_dim.currentText()
             dim_col  = self.DIMS[dim_nome]
-            tipo     = cb_tipo.currentText()   # "Entradas" ou "Saídas"
-            grp.setTitle(f"{dim_nome}  —  {tipo}")
-            self._fill_tabela(tbl, df, dim_col, dim_nome, tipo)
+            if dim_nome in self.DIMS_TEMPORAIS:
+                grp.setTitle(dim_nome)
+                self._set_colunas_temporais(tbl, dim_nome)
+                self._fill_tabela_temporal(tbl, df, dim_col, dim_nome)
+            else:
+                tipo = cb_tipo.currentText()
+                grp.setTitle(f"{dim_nome}  —  {tipo}")
+                self._set_colunas_tipo(tbl, dim_nome)
+                self._fill_tabela(tbl, df, dim_col, dim_nome, tipo)
 
         # maior gasto único
         df_sai = df[df["Valor"] < 0]
@@ -1705,6 +1730,31 @@ class AbaDashboard(QWidget):
                 f"{fmt_valor(row['Valor'])}")
         else:
             self._lbl_maior.setText("")
+
+    def _fill_tabela_temporal(self, tbl, df, col, dim_nome):
+        tbl.setRowCount(0)
+        grp = df.groupby(col)["Valor"].sum()
+        chaves = sorted(grp.index.tolist())
+        for chave in chaves:
+            if str(chave).strip() == "":
+                continue
+            if col == "Mes":
+                label = f"{int(chave)} – {NOMES_MESES.get(int(chave), '')}"
+            else:
+                label = str(int(chave))
+            sub = df[df[col] == chave]
+            ent = sub[sub["Valor"] > 0]["Valor"].sum()
+            sai = sub[sub["Valor"] < 0]["Valor"].sum()
+            sal = ent + sai
+            r = tbl.rowCount(); tbl.insertRow(r)
+            tbl.setItem(r, 0, QTableWidgetItem(label))
+            for c_idx, val in enumerate((ent, sai, sal), start=1):
+                it = QTableWidgetItem(fmt_valor(val))
+                it.setForeground(QBrush(cor_valor(val)))
+                it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                tbl.setItem(r, c_idx, it)
+        tbl.resizeColumnsToContents()
+        tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
 
     def _fill_tabela(self, tbl, df, col, dim_nome, tipo):
         tbl.setHorizontalHeaderLabels([dim_nome, "Total", "%"])

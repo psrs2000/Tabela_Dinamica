@@ -26,7 +26,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView, QStatusBar, QFrame, QCompleter,
     QMenu, QWidgetAction,
 )
-from PyQt5.QtCore import Qt, QSize, QSortFilterProxyModel, QStringListModel, QEvent
+from PyQt5.QtCore import Qt, QSize, QSortFilterProxyModel, QStringListModel
 from PyQt5.QtGui import QColor, QBrush, QFont, QPalette
 
 def _app_dir() -> str:
@@ -997,22 +997,6 @@ class AbaImport(QWidget):
 
 ALL_DIM = ["Ano", "Mes", "Categoria", "Sub_Categoria", "Transacao", "Descricao"]
 
-
-class _HeaderClickFilter(QObject):
-    """Event filter dedicado para capturar cliques no cabeçalho do QTreeWidget."""
-    def __init__(self, header, callback):
-        super().__init__()
-        self._header = header
-        self._cb = callback
-
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
-            col = self._header.logicalIndexAt(event.pos())
-            if col >= 0:
-                self._cb(col)
-        return False
-
-
 class AbaPivot(QWidget):
     def __init__(self):
         super().__init__()
@@ -1134,13 +1118,7 @@ class AbaPivot(QWidget):
         self._tree.setRootIsDecorated(True)
         self._tree.setSortingEnabled(False)
         self._tree.header().setSectionResizeMode(QHeaderView.Interactive)
-        self._tree.header().setSectionsClickable(True)
         self._tree.setFont(QFont("Segoe UI", 11))
-        # event filter dedicado para capturar cliques em qualquer coluna
-        self._header_filter = _HeaderClickFilter(self._tree.header(), self._ordenar_por_coluna)
-        self._tree.header().installEventFilter(self._header_filter)
-        self._sort_col = -1
-        self._sort_asc = True
         root.addWidget(self._tree, 1)
 
         self._status = QLabel("")
@@ -1302,57 +1280,6 @@ class AbaPivot(QWidget):
         else:          self._excluidos2.clear()
         self._gerar()
 
-    # ── ordenação por clique no cabeçalho ────────────────
-    def _ordenar_por_coluna(self, col: int):
-        if getattr(self, "_sorting", False):
-            return
-        self._sorting = True
-        try:
-            alfa = (col == 0)
-            self._sort_asc = (not self._sort_asc) if self._sort_col == col else (col == 0)
-            self._sort_col = col
-            self._reordenar(col, alfa=alfa)
-            hdr = self._tree.header()
-            hdr.blockSignals(True)
-            hdr.setSortIndicatorShown(True)
-            hdr.setSortIndicator(col, Qt.AscendingOrder if self._sort_asc else Qt.DescendingOrder)
-            hdr.blockSignals(False)
-            direc = "crescente" if self._sort_asc else "decrescente"
-            nome_col = self._tree.headerItem().text(col)
-            self._status.setText(f"Ordenado por: {nome_col}  ({direc})")
-        finally:
-            self._sorting = False
-
-    def _reordenar(self, col: int, alfa: bool):
-        n = self._tree.topLevelItemCount()
-        if n == 0:
-            return
-        # retirar todos os itens sem destruí-los
-        items = []
-        total_item = None
-        while self._tree.topLevelItemCount() > 0:
-            item = self._tree.takeTopLevelItem(0)
-            if item.text(0) == "Total Geral":
-                total_item = item
-            else:
-                items.append(item)
-
-        def chave(item):
-            txt = item.text(col)
-            if alfa:
-                return txt.lower()
-            # extrai apenas dígitos, sinal e separador decimal
-            num = re.sub(r"[R$\s%\.]", "", txt).replace(",", ".")
-            try:    return float(num)
-            except: return 0.0
-        items.sort(key=chave, reverse=not self._sort_asc)
-
-        for item in items:
-            self._tree.addTopLevelItem(item)
-            item.setExpanded(item.text(0) in self._expandidos)
-        if total_item:
-            self._tree.addTopLevelItem(total_item)
-
     # ── gerar ─────────────────────────────────────────────
     def _gerar(self):
         self._atualizar_filtros()
@@ -1426,8 +1353,6 @@ class AbaPivot(QWidget):
         hdrs = [f"{row1}" + (f" / {row2}" if use_row2 else "")] + \
                [str(cv) for cv in col_vals] + ["Total Geral"]
         self._tree.clear()
-        self._sort_col = -1  # reset ordenação ao regerar
-        self._tree.header().setSortIndicatorShown(False)
         self._tree.setColumnCount(len(hdrs))
         self._tree.setHeaderLabels(hdrs)
         self._tree.header().setSectionResizeMode(0, QHeaderView.Interactive)

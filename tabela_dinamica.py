@@ -997,6 +997,22 @@ class AbaImport(QWidget):
 
 ALL_DIM = ["Ano", "Mes", "Categoria", "Sub_Categoria", "Transacao", "Descricao"]
 
+
+class _HeaderClickFilter(QObject):
+    """Event filter dedicado para capturar cliques no cabeçalho do QTreeWidget."""
+    def __init__(self, header, callback):
+        super().__init__()
+        self._header = header
+        self._cb = callback
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            col = self._header.logicalIndexAt(event.pos())
+            if col >= 0:
+                self._cb(col)
+        return False
+
+
 class AbaPivot(QWidget):
     def __init__(self):
         super().__init__()
@@ -1120,8 +1136,9 @@ class AbaPivot(QWidget):
         self._tree.header().setSectionResizeMode(QHeaderView.Interactive)
         self._tree.header().setSectionsClickable(True)
         self._tree.setFont(QFont("Segoe UI", 11))
-        # event filter no header para capturar cliques em qualquer coluna
-        self._tree.header().installEventFilter(self)
+        # event filter dedicado para capturar cliques em qualquer coluna
+        self._header_filter = _HeaderClickFilter(self._tree.header(), self._ordenar_por_coluna)
+        self._tree.header().installEventFilter(self._header_filter)
         self._sort_col = -1
         self._sort_asc = True
         root.addWidget(self._tree, 1)
@@ -1284,16 +1301,6 @@ class AbaPivot(QWidget):
         if linha == 1: self._excluidos1.clear()
         else:          self._excluidos2.clear()
         self._gerar()
-
-    # ── event filter: detecta clique em qualquer coluna do cabeçalho ──
-    def eventFilter(self, obj, event):
-        if obj is self._tree.header() and event.type() == QEvent.MouseButtonRelease:
-            if event.button() == Qt.LeftButton:
-                col = self._tree.header().logicalIndexAt(event.pos())
-                if col >= 0:
-                    self._ordenar_por_coluna(col)
-            return True
-        return super().eventFilter(obj, event)
 
     # ── ordenação por clique no cabeçalho ────────────────
     def _ordenar_por_coluna(self, col: int):

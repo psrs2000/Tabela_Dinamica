@@ -1286,19 +1286,25 @@ class AbaPivot(QWidget):
 
     # ── ordenação por clique no cabeçalho ────────────────
     def _ordenar_por_coluna(self, col: int):
-        if col == 0:
-            # coluna de rótulo: ordenar alfabeticamente
-            self._sort_asc = not self._sort_asc if self._sort_col == col else True
-            self._sort_col = col
-            self._reordenar(col, alfa=True)
-        else:
-            self._sort_asc = not self._sort_asc if self._sort_col == col else False  # maior→menor por padrão
-            self._sort_col = col
-            self._reordenar(col, alfa=False)
-        # atualizar indicador visual no cabeçalho
-        hdr = self._tree.header()
-        hdr.setSortIndicatorShown(True)
-        hdr.setSortIndicator(col, Qt.AscendingOrder if self._sort_asc else Qt.DescendingOrder)
+        if getattr(self, "_sorting", False):
+            return
+        self._sorting = True
+        try:
+            if col == 0:
+                self._sort_asc = not self._sort_asc if self._sort_col == col else True
+                self._sort_col = col
+                self._reordenar(col, alfa=True)
+            else:
+                self._sort_asc = not self._sort_asc if self._sort_col == col else False
+                self._sort_col = col
+                self._reordenar(col, alfa=False)
+            hdr = self._tree.header()
+            hdr.blockSignals(True)
+            hdr.setSortIndicatorShown(True)
+            hdr.setSortIndicator(col, Qt.AscendingOrder if self._sort_asc else Qt.DescendingOrder)
+            hdr.blockSignals(False)
+        finally:
+            self._sorting = False
 
     def _reordenar(self, col: int, alfa: bool):
         n = self._tree.topLevelItemCount()

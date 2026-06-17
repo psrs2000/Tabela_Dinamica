@@ -1629,7 +1629,9 @@ class AbaDashboard(QWidget):
 
     def __init__(self):
         super().__init__()
+        self._cfg_aplicado = False
         self._build()
+        self._restaurar_config()
 
     def _build(self):
         root = QVBoxLayout(self)
@@ -1641,14 +1643,17 @@ class AbaDashboard(QWidget):
         flt.addWidget(QLabel("Ano:"))
         self._f_ano = QComboBox(); self._f_ano.setFixedWidth(90)
         self._f_ano.currentIndexChanged.connect(self._preencher)
+        self._f_ano.currentIndexChanged.connect(self._salvar_config)
         flt.addWidget(self._f_ano)
         flt.addWidget(QLabel("  Mês:"))
         self._f_mes = QComboBox(); self._f_mes.setMinimumWidth(150)
         self._f_mes.currentIndexChanged.connect(self._preencher)
+        self._f_mes.currentIndexChanged.connect(self._salvar_config)
         flt.addWidget(self._f_mes)
 
         self._chk_periodo = QCheckBox("  Filtrar por período:")
         self._chk_periodo.toggled.connect(self._on_toggle_periodo)
+        self._chk_periodo.toggled.connect(self._salvar_config)
         flt.addWidget(self._chk_periodo)
         flt.addWidget(QLabel("De:"))
         self._dt_de = QDateEdit(); self._dt_de.setCalendarPopup(True)
@@ -1701,10 +1706,12 @@ class AbaDashboard(QWidget):
             cb_dim.currentIndexChanged.connect(
                 lambda _, c=cb_dim, ct=cb_tipo: (
                     ct.setVisible(c.currentText() not in self.DIMS_TEMPORAIS),
-                    self._preencher()
+                    self._preencher(),
+                    self._salvar_config()
                 )
             )
             cb_tipo.currentIndexChanged.connect(self._preencher)
+            cb_tipo.currentIndexChanged.connect(self._salvar_config)
             ctrl.addWidget(cb_dim, 1)
             ctrl.addWidget(cb_tipo)
             lay.addLayout(ctrl)
@@ -1770,6 +1777,41 @@ class AbaDashboard(QWidget):
             self._dt_ate.blockSignals(True); self._dt_ate.setDate(hoje); self._dt_ate.blockSignals(False)
         self._preencher()
 
+    # ── persistência de configuração (config.json) ───────
+    def _salvar_config(self):
+        cfg_save({"dashboard_config": {
+            "f_ano":          self._f_ano.currentText(),
+            "f_mes":          self._f_mes.currentText(),
+            "periodo_ligado": self._chk_periodo.isChecked(),
+            "paineis": [
+                {"dim": cb_dim.currentText(), "tipo": cb_tipo.currentText()}
+                for _, cb_dim, cb_tipo, _ in self._paineis
+            ],
+        }})
+
+    def _restaurar_config(self):
+        cfg = cfg_load().get("dashboard_config")
+        if not cfg:
+            return
+        self._cfg_pendente = cfg
+        paineis_cfg = cfg.get("paineis", [])
+        for (grp, cb_dim, cb_tipo, tbl), pcfg in zip(self._paineis, paineis_cfg):
+            cb_dim.blockSignals(True); cb_tipo.blockSignals(True)
+            dim = pcfg.get("dim")
+            if dim and cb_dim.findText(dim) >= 0:
+                cb_dim.setCurrentText(dim)
+            tipo = pcfg.get("tipo")
+            if tipo and cb_tipo.findText(tipo) >= 0:
+                cb_tipo.setCurrentText(tipo)
+            cb_tipo.setVisible(cb_dim.currentText() not in self.DIMS_TEMPORAIS)
+            cb_dim.blockSignals(False); cb_tipo.blockSignals(False)
+        if "periodo_ligado" in cfg:
+            self._chk_periodo.blockSignals(True)
+            self._chk_periodo.setChecked(bool(cfg["periodo_ligado"]))
+            self._dt_de.setEnabled(self._chk_periodo.isChecked())
+            self._dt_ate.setEnabled(self._chk_periodo.isChecked())
+            self._chk_periodo.blockSignals(False)
+
     def atualizar(self):
         if not PANDAS_OK:
             return
@@ -1786,13 +1828,15 @@ class AbaDashboard(QWidget):
 
         anos  = ["(todos)"] + sorted(df["Ano"].dropna().unique().astype(int).astype(str).tolist())
         meses = ["(todos)"] + [f"{i} – {NOMES_MESES[i]}" for i in range(1, 13)]
-        for cb, vals in ((self._f_ano, anos), (self._f_mes, meses)):
-            cur = cb.currentText()
+        cfg_pendente = getattr(self, "_cfg_pendente", None) if not self._cfg_aplicado else None
+        for cb, vals, cfg_key in ((self._f_ano, anos, "f_ano"), (self._f_mes, meses, "f_mes")):
+            cur = cfg_pendente.get(cfg_key) if cfg_pendente else cb.currentText()
             cb.blockSignals(True)
             cb.clear(); cb.addItems(vals)
-            idx = cb.findText(cur)
+            idx = cb.findText(cur) if cur else -1
             cb.setCurrentIndex(idx if idx >= 0 else 0)
             cb.blockSignals(False)
+        self._cfg_aplicado = True
         self._preencher()
 
     def _preencher(self):

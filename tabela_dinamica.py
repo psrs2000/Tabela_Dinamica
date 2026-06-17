@@ -1494,6 +1494,14 @@ class AbaPivot(QWidget):
             self._tree.setColumnWidth(c, 105)
             self._tree.header().setSectionResizeMode(c, QHeaderView.Interactive)
 
+        # alinhamento do cabeçalho: rótulo à esquerda, colunas intermediárias
+        # centralizadas, Total Geral à direita (mesmo alinhamento dos dados)
+        hdr_item = self._tree.headerItem()
+        hdr_item.setTextAlignment(0, Qt.AlignLeft | Qt.AlignVCenter)
+        for c in range(1, len(hdrs) - 1):
+            hdr_item.setTextAlignment(c, Qt.AlignCenter)
+        hdr_item.setTextAlignment(len(hdrs) - 1, Qt.AlignRight | Qt.AlignVCenter)
+
         font_bold = QFont("Segoe UI", 11, QFont.Bold)
         font_reg  = QFont("Segoe UI", 11)
 
@@ -1592,7 +1600,8 @@ class AbaPivot(QWidget):
                 parent.setBackground(c, QBrush(BG_GRUPO))
                 v = g_cv.get(str(col_vals[c-1]), g_tot) if c < len(hdrs)-1 else g_tot
                 parent.setForeground(c, QBrush(cor_cel(v)))
-                parent.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter)
+                parent.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter
+                                         if c == len(hdrs) - 1 else Qt.AlignCenter)
             export_rows.append([str(g)] + g_strs)
 
             for sg, sg_cv, sg_tot in subgrupos_dados:
@@ -1604,7 +1613,8 @@ class AbaPivot(QWidget):
                     child.setFont(c, font_reg)
                     v = sg_cv.get(str(col_vals[c-1]), sg_tot) if c < len(hdrs)-1 else sg_tot
                     child.setForeground(c, QBrush(cor_cel(v)))
-                    child.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter)
+                    child.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter
+                                            if c == len(hdrs) - 1 else Qt.AlignCenter)
                 parent.addChild(child)
                 export_rows.append(["  " + str(sg)] + sg_strs)
 
@@ -1623,7 +1633,8 @@ class AbaPivot(QWidget):
                 total_item.setBackground(c, QBrush(BG_TOTAL))
                 v = grand.get(str(col_vals[c-1]), gt_tot) if c < len(hdrs)-1 else gt_tot
                 total_item.setForeground(c, QBrush(cor_cel(v)))
-                total_item.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter)
+                total_item.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter
+                                             if c == len(hdrs) - 1 else Qt.AlignCenter)
             self._tree.addTopLevelItem(total_item)
             export_rows.append(["Total Geral"] + gt_strs)
 

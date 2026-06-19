@@ -23,10 +23,11 @@ from PyQt5.QtWidgets import (
     QRadioButton, QButtonGroup, QGroupBox, QFileDialog,
     QMessageBox, QTableWidget, QTableWidgetItem,
     QTreeWidget, QTreeWidgetItem, QHeaderView, QSplitter,
-    QAbstractItemView, QStatusBar, QFrame, QCompleter,
-    QMenu, QWidgetAction, QDateEdit,
+    QAbstractItemView, QStatusBar, QFrame,
+    QMenu, QWidgetAction, QDateEdit, QListWidget, QListWidgetItem,
+    QInputDialog,
 )
-from PyQt5.QtCore import Qt, QSize, QSortFilterProxyModel, QStringListModel, QDate
+from PyQt5.QtCore import Qt, QSize, QSortFilterProxyModel, QDate
 from PyQt5.QtGui import QColor, QBrush, QFont, QPalette
 
 def _app_dir() -> str:
@@ -91,6 +92,26 @@ def init_db():
             Valor         REAL
         )
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS categorias (
+            id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT UNIQUE NOT NULL
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS subcategorias (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome         TEXT NOT NULL,
+            categoria_id INTEGER NOT NULL REFERENCES categorias(id),
+            UNIQUE(nome, categoria_id)
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS transacoes (
+            id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT UNIQUE NOT NULL
+        )
+    """)
     con.commit()
     # garante que o banco nunca fica vazio (evita crash no pandas/Qt)
     cur = con.execute("SELECT COUNT(*) FROM registros")
@@ -102,6 +123,218 @@ def init_db():
         )
         con.commit()
     con.close()
+    _migrar_cadastros_do_historico()
+
+
+def _migrar_cadastros_do_historico():
+    """Na 1ª vez que as tabelas de cadastro existirem vazias, recria os vínculos
+    Categoria/Sub-Categoria/Transação a partir do que já foi usado nos lançamentos."""
+    con = sqlite3.connect(DB_PATH)
+    n_cat = con.execute("SELECT COUNT(*) FROM categorias").fetchone()[0]
+    if n_cat > 0:
+        con.close()
+        return
+    pares = con.execute(
+        "SELECT DISTINCT Categoria, Sub_Categoria FROM registros"
+        " WHERE Ano != 1900 AND Categoria != ''"
+    ).fetchall()
+    transacoes = con.execute(
+        "SELECT DISTINCT Transacao FROM registros"
+        " WHERE Ano != 1900 AND Transacao != ''"
+    ).fetchall()
+    cat_ids = {}
+    for cat, sub in pares:
+        if cat not in cat_ids:
+            con.execute("INSERT OR IGNORE INTO categorias (nome) VALUES (?)", (cat,))
+            cat_ids[cat] = con.execute(
+                "SELECT id FROM categorias WHERE nome=?", (cat,)).fetchone()[0]
+        if sub:
+            con.execute(
+                "INSERT OR IGNORE INTO subcategorias (nome, categoria_id) VALUES (?,?)",
+                (sub, cat_ids[cat])
+            )
+    for (tr,) in transacoes:
+        if tr:
+            con.execute("INSERT OR IGNORE INTO transacoes (nome) VALUES (?)", (tr,))
+    con.commit()
+    con.close()
+
+
+# ═══════════════════════════════════════════════════════════
+#  CADASTROS: CATEGORIAS / SUB-CATEGORIAS / TRANSAÇÕES
+# ═══════════════════════════════════════════════════════════
+
+def listar_categorias():
+    con = sqlite3.connect(DB_PATH)
+    rows = con.execute("SELECT id, nome FROM categorias ORDER BY nome").fetchall()
+    con.close()
+    return rows
+
+
+def id_categoria_por_nome(nome):
+    con = sqlite3.connect(DB_PATH)
+    row = con.execute("SELECT id FROM categorias WHERE nome=?", (nome,)).fetchone()
+    con.close()
+    return row[0] if row else None
+
+
+def inserir_categoria(nome: str):
+    con = sqlite3.connect(DB_PATH)
+    try:
+        con.execute("INSERT INTO categorias (nome) VALUES (?)", (nome.strip(),))
+        con.commit()
+        return True, ""
+    except sqlite3.IntegrityError:
+        return False, "Já existe uma categoria com esse nome."
+    finally:
+        con.close()
+
+
+def renomear_categoria(cid: int, novo_nome: str):
+    novo_nome = novo_nome.strip()
+    con = sqlite3.connect(DB_PATH)
+    old = con.execute("SELECT nome FROM categorias WHERE id=?", (cid,)).fetchone()[0]
+    try:
+        con.execute("UPDATE categorias SET nome=? WHERE id=?", (novo_nome, cid))
+        con.execute("UPDATE registros SET Categoria=? WHERE Categoria=?", (novo_nome, old))
+        con.commit()
+        return True, ""
+    except sqlite3.IntegrityError:
+        con.rollback()
+        return False, "Já existe uma categoria com esse nome."
+    finally:
+        con.close()
+
+
+def excluir_categoria(cid: int):
+    con = sqlite3.connect(DB_PATH)
+    nome = con.execute("SELECT nome FROM categorias WHERE id=?", (cid,)).fetchone()[0]
+    n_uso = con.execute(
+        "SELECT COUNT(*) FROM registros WHERE Categoria=?", (nome,)).fetchone()[0]
+    n_sub = con.execute(
+        "SELECT COUNT(*) FROM subcategorias WHERE categoria_id=?", (cid,)).fetchone()[0]
+    if n_uso:
+        con.close()
+        return False, f"Não é possível excluir: {n_uso} registro(s) usam esta categoria."
+    if n_sub:
+        con.close()
+        return False, (f"Não é possível excluir: existem {n_sub} sub-categoria(s) "
+                        f"cadastradas nesta categoria. Exclua-as primeiro.")
+    con.execute("DELETE FROM categorias WHERE id=?", (cid,))
+    con.commit()
+    con.close()
+    return True, ""
+
+
+def listar_subcategorias(categoria_id: int):
+    con = sqlite3.connect(DB_PATH)
+    rows = con.execute(
+        "SELECT id, nome FROM subcategorias WHERE categoria_id=? ORDER BY nome",
+        (categoria_id,)).fetchall()
+    con.close()
+    return rows
+
+
+def inserir_subcategoria(nome: str, categoria_id: int):
+    con = sqlite3.connect(DB_PATH)
+    try:
+        con.execute(
+            "INSERT INTO subcategorias (nome, categoria_id) VALUES (?,?)",
+            (nome.strip(), categoria_id))
+        con.commit()
+        return True, ""
+    except sqlite3.IntegrityError:
+        return False, "Já existe uma sub-categoria com esse nome nesta categoria."
+    finally:
+        con.close()
+
+
+def renomear_subcategoria(sid: int, novo_nome: str):
+    novo_nome = novo_nome.strip()
+    con = sqlite3.connect(DB_PATH)
+    old, categoria_id = con.execute(
+        "SELECT nome, categoria_id FROM subcategorias WHERE id=?", (sid,)).fetchone()
+    cat_nome = con.execute(
+        "SELECT nome FROM categorias WHERE id=?", (categoria_id,)).fetchone()[0]
+    try:
+        con.execute("UPDATE subcategorias SET nome=? WHERE id=?", (novo_nome, sid))
+        con.execute(
+            "UPDATE registros SET Sub_Categoria=? WHERE Sub_Categoria=? AND Categoria=?",
+            (novo_nome, old, cat_nome))
+        con.commit()
+        return True, ""
+    except sqlite3.IntegrityError:
+        con.rollback()
+        return False, "Já existe uma sub-categoria com esse nome nesta categoria."
+    finally:
+        con.close()
+
+
+def excluir_subcategoria(sid: int):
+    con = sqlite3.connect(DB_PATH)
+    nome, categoria_id = con.execute(
+        "SELECT nome, categoria_id FROM subcategorias WHERE id=?", (sid,)).fetchone()
+    cat_nome = con.execute(
+        "SELECT nome FROM categorias WHERE id=?", (categoria_id,)).fetchone()[0]
+    n_uso = con.execute(
+        "SELECT COUNT(*) FROM registros WHERE Sub_Categoria=? AND Categoria=?",
+        (nome, cat_nome)).fetchone()[0]
+    if n_uso:
+        con.close()
+        return False, f"Não é possível excluir: {n_uso} registro(s) usam esta sub-categoria."
+    con.execute("DELETE FROM subcategorias WHERE id=?", (sid,))
+    con.commit()
+    con.close()
+    return True, ""
+
+
+def listar_transacoes():
+    con = sqlite3.connect(DB_PATH)
+    rows = con.execute("SELECT id, nome FROM transacoes ORDER BY nome").fetchall()
+    con.close()
+    return rows
+
+
+def inserir_transacao(nome: str):
+    con = sqlite3.connect(DB_PATH)
+    try:
+        con.execute("INSERT INTO transacoes (nome) VALUES (?)", (nome.strip(),))
+        con.commit()
+        return True, ""
+    except sqlite3.IntegrityError:
+        return False, "Já existe uma transação com esse nome."
+    finally:
+        con.close()
+
+
+def renomear_transacao(tid: int, novo_nome: str):
+    novo_nome = novo_nome.strip()
+    con = sqlite3.connect(DB_PATH)
+    old = con.execute("SELECT nome FROM transacoes WHERE id=?", (tid,)).fetchone()[0]
+    try:
+        con.execute("UPDATE transacoes SET nome=? WHERE id=?", (novo_nome, tid))
+        con.execute("UPDATE registros SET Transacao=? WHERE Transacao=?", (novo_nome, old))
+        con.commit()
+        return True, ""
+    except sqlite3.IntegrityError:
+        con.rollback()
+        return False, "Já existe uma transação com esse nome."
+    finally:
+        con.close()
+
+
+def excluir_transacao(tid: int):
+    con = sqlite3.connect(DB_PATH)
+    nome = con.execute("SELECT nome FROM transacoes WHERE id=?", (tid,)).fetchone()[0]
+    n_uso = con.execute(
+        "SELECT COUNT(*) FROM registros WHERE Transacao=?", (nome,)).fetchone()[0]
+    if n_uso:
+        con.close()
+        return False, f"Não é possível excluir: {n_uso} registro(s) usam esta transação."
+    con.execute("DELETE FROM transacoes WHERE id=?", (tid,))
+    con.commit()
+    con.close()
+    return True, ""
 
 
 def _mes_ano(data_str: str):
@@ -307,15 +540,6 @@ def item_valor(v) -> QTableWidgetItem:
     return it
 
 
-def buscar_distintos(campo: str) -> list:
-    con = sqlite3.connect(DB_PATH)
-    cur = con.execute(
-        f"SELECT DISTINCT {campo} FROM registros WHERE {campo} IS NOT NULL AND {campo}!='' ORDER BY {campo}")
-    vals = [r[0] for r in cur.fetchall()]
-    con.close()
-    return vals
-
-
 def _btn(texto, cor_bg, slot, min_w=100):
     """Cria um QPushButton padronizado."""
     b = QPushButton(texto)
@@ -369,20 +593,21 @@ class AbaForm(QWidget):
         for row_idx, (key, lbl_txt, is_combo) in enumerate(specs):
             form.addWidget(QLabel(lbl_txt + ":"), row_idx, 0, Qt.AlignRight)
             if is_combo:
+                # combos de Categoria/Sub-Categoria/Transação só permitem
+                # escolher valores já cadastrados (aba "Categorias") —
+                # evita categorias "sujas" criadas por erro de digitação
                 w = QComboBox()
-                w.setEditable(True)
-                w.setInsertPolicy(QComboBox.NoInsert)
+                w.setEditable(False)
                 w.setMinimumWidth(260)
-                comp = QCompleter([], w)
-                comp.setCaseSensitivity(Qt.CaseInsensitive)
-                comp.setFilterMode(Qt.MatchContains)
-                w.setCompleter(comp)
             else:
                 w = QLineEdit()
                 if key == "Descricao":
                     w.setMinimumWidth(450)
             form.addWidget(w, row_idx, 1, Qt.AlignLeft)
             self._campos[key] = w
+        # ao trocar a Categoria, a lista de Sub-Categoria deve refletir só
+        # as sub-categorias cadastradas para aquela categoria
+        self._campos["Categoria"].currentTextChanged.connect(self._on_categoria_form_changed)
 
         # botões do formulário
         btn_row = QHBoxLayout()
@@ -515,19 +740,53 @@ class AbaForm(QWidget):
             w.clear()
 
     def _atualizar_combos(self):
-        """Recarrega listas de Categoria, Sub_Categoria e Transacao a partir do banco."""
-        for key, campo in [("Categoria", "Categoria"), ("Sub_Categoria", "Sub_Categoria"),
-                           ("Transacao", "Transacao")]:
-            vals = buscar_distintos(campo)
-            w = self._campos[key]
-            cur = w.currentText()
-            w.blockSignals(True)
-            w.clear()
-            w.addItems(vals)
-            w.setCurrentText(cur)
-            w.blockSignals(False)
-            if w.completer():
-                w.completer().setModel(QStringListModel(vals, w.completer()))
+        """Recarrega Categoria/Sub-Categoria/Transação a partir dos cadastros
+        (aba "Categorias"), mantendo a seleção atual quando ainda existir."""
+        cb_cat = self._campos["Categoria"]
+        cur_cat = cb_cat.currentText()
+        cats = [n for _, n in listar_categorias()]
+        cb_cat.blockSignals(True)
+        cb_cat.clear()
+        cb_cat.addItems(cats)
+        idx = cb_cat.findText(cur_cat)
+        cb_cat.setCurrentIndex(idx if idx >= 0 else (0 if cats else -1))
+        cb_cat.blockSignals(False)
+
+        self._atualizar_subcats_form(preservar=True)
+
+        cb_tran = self._campos["Transacao"]
+        cur_tran = cb_tran.currentText()
+        trans = [n for _, n in listar_transacoes()]
+        cb_tran.blockSignals(True)
+        cb_tran.clear()
+        cb_tran.addItems(trans)
+        idx = cb_tran.findText(cur_tran)
+        cb_tran.setCurrentIndex(idx if idx >= 0 else (0 if trans else -1))
+        cb_tran.blockSignals(False)
+
+    def _atualizar_subcats_form(self, preservar=True):
+        """Recarrega o combo de Sub-Categoria com apenas as sub-categorias
+        cadastradas para a Categoria atualmente selecionada no formulário."""
+        cb_cat = self._campos["Categoria"]
+        cb_sub = self._campos["Sub_Categoria"]
+        cur_sub = cb_sub.currentText() if preservar else ""
+        cat_nome = cb_cat.currentText()
+        subs = []
+        if cat_nome:
+            cid = id_categoria_por_nome(cat_nome)
+            if cid:
+                subs = [n for _, n in listar_subcategorias(cid)]
+        cb_sub.blockSignals(True)
+        cb_sub.clear()
+        cb_sub.addItems(subs)
+        idx = cb_sub.findText(cur_sub)
+        cb_sub.setCurrentIndex(idx if idx >= 0 else (0 if subs else -1))
+        cb_sub.blockSignals(False)
+
+    def _on_categoria_form_changed(self, _texto):
+        if getattr(self, "_carregando_selecao", False):
+            return
+        self._atualizar_subcats_form(preservar=False)
 
     def _atualizar_filtros_combo(self):
         anos  = ["(todos)"] + sorted(set(
@@ -627,8 +886,11 @@ class AbaForm(QWidget):
             self._clear_field(key)
         ultimo = buscar_ultimo_registro()
         if ultimo:
-            for key in ("Data", "Categoria", "Sub_Categoria", "Transacao"):
-                self._set_text(key, ultimo[key] or "")
+            self._set_text("Data", ultimo["Data"] or "")
+            self._set_text("Categoria", ultimo["Categoria"] or "")
+            self._atualizar_subcats_form(preservar=False)
+            self._set_text("Sub_Categoria", ultimo["Sub_Categoria"] or "")
+            self._set_text("Transacao", ultimo["Transacao"] or "")
         self._carregando_selecao = False
         self._edit_id = None
         self._dirty.clear()
@@ -692,6 +954,7 @@ class AbaForm(QWidget):
         self._edit_id = int(self._table.item(r, 0).text())
         self._set_text("Data",          self._table.item(r, 1).text())
         self._set_text("Categoria",     self._table.item(r, 4).text())
+        self._atualizar_subcats_form(preservar=False)
         self._set_text("Sub_Categoria", self._table.item(r, 5).text())
         self._set_text("Transacao",     self._table.item(r, 6).text())
         self._set_text("Descricao",     self._table.item(r, 7).text())
@@ -708,6 +971,7 @@ class AbaForm(QWidget):
         self._carregando_selecao = True
         self._set_text("Data",          self._table.item(r, 1).text())
         self._set_text("Categoria",     self._table.item(r, 4).text())
+        self._atualizar_subcats_form(preservar=False)
         self._set_text("Sub_Categoria", self._table.item(r, 5).text())
         self._set_text("Transacao",     self._table.item(r, 6).text())
         self._set_text("Descricao",     self._table.item(r, 7).text())
@@ -1161,6 +1425,261 @@ class AbaImport(QWidget):
         except Exception as e:
             self._status.setText(f"Erro: {e}")
             self._status.setStyleSheet("color:#c62828")
+
+
+# ═══════════════════════════════════════════════════════════
+#  ABA CATEGORIAS (gerenciamento de Categoria/Sub-Categoria/Transação)
+# ═══════════════════════════════════════════════════════════
+
+class AbaCategorias(QWidget):
+    """Cadastro de Categorias, Sub-Categorias (vinculadas a uma Categoria) e
+    Transações, usados como listas fechadas nos combos da aba Dados."""
+
+    def __init__(self, aba_form: AbaForm):
+        super().__init__()
+        self._aba_form = aba_form
+        self._build()
+        self._recarregar_categorias()
+        self._recarregar_transacoes()
+
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(8)
+
+        info = QLabel(
+            "Cadastre aqui as Categorias, Sub-Categorias e Transações que poderão ser "
+            "escolhidas na aba \"Dados\". Cada Sub-Categoria pertence a uma Categoria.")
+        info.setStyleSheet("color:#555; font-size:11px;")
+        info.setWordWrap(True)
+        root.addWidget(info)
+
+        cols = QHBoxLayout()
+        cols.setSpacing(12)
+
+        # ── Categorias ─────────────────────────────────────
+        grp_cat = QGroupBox("Categorias")
+        lay_cat = QVBoxLayout(grp_cat)
+        self._lst_cat = QListWidget()
+        self._lst_cat.currentItemChanged.connect(self._on_categoria_selecionada)
+        lay_cat.addWidget(self._lst_cat)
+        row_cat = QHBoxLayout()
+        row_cat.addWidget(_btn("Adicionar", "#4CAF50", self._add_categoria, 90))
+        row_cat.addWidget(_btn("Renomear",  "#1565C0", self._ren_categoria, 90))
+        row_cat.addWidget(_btn("Excluir",   "#f44336", self._del_categoria, 90))
+        lay_cat.addLayout(row_cat)
+        cols.addWidget(grp_cat, 1)
+
+        # ── Sub-Categorias ──────────────────────────────────
+        grp_sub = QGroupBox("Sub-Categorias")
+        lay_sub = QVBoxLayout(grp_sub)
+        self._lbl_sub = QLabel("Selecione uma categoria à esquerda")
+        self._lbl_sub.setStyleSheet("color:#777; font-size:11px;")
+        lay_sub.addWidget(self._lbl_sub)
+        self._lst_sub = QListWidget()
+        lay_sub.addWidget(self._lst_sub)
+        row_sub = QHBoxLayout()
+        row_sub.addWidget(_btn("Adicionar", "#4CAF50", self._add_subcategoria, 90))
+        row_sub.addWidget(_btn("Renomear",  "#1565C0", self._ren_subcategoria, 90))
+        row_sub.addWidget(_btn("Excluir",   "#f44336", self._del_subcategoria, 90))
+        lay_sub.addLayout(row_sub)
+        cols.addWidget(grp_sub, 1)
+
+        # ── Transações ──────────────────────────────────────
+        grp_tran = QGroupBox("Transações")
+        lay_tran = QVBoxLayout(grp_tran)
+        self._lst_tran = QListWidget()
+        lay_tran.addWidget(self._lst_tran)
+        row_tran = QHBoxLayout()
+        row_tran.addWidget(_btn("Adicionar", "#4CAF50", self._add_transacao, 90))
+        row_tran.addWidget(_btn("Renomear",  "#1565C0", self._ren_transacao, 90))
+        row_tran.addWidget(_btn("Excluir",   "#f44336", self._del_transacao, 90))
+        lay_tran.addLayout(row_tran)
+        cols.addWidget(grp_tran, 1)
+
+        root.addLayout(cols, 1)
+
+    # ── recarregar listas ─────────────────────────────────
+    def _recarregar_categorias(self):
+        atual = self._lst_cat.currentItem().text() if self._lst_cat.currentItem() else None
+        self._lst_cat.clear()
+        for cid, nome in listar_categorias():
+            item = QListWidgetItem(nome)
+            item.setData(Qt.UserRole, cid)
+            self._lst_cat.addItem(item)
+        if atual:
+            for i in range(self._lst_cat.count()):
+                if self._lst_cat.item(i).text() == atual:
+                    self._lst_cat.setCurrentRow(i)
+                    return
+        self._recarregar_subcategorias()
+
+    def _recarregar_subcategorias(self):
+        item = self._lst_cat.currentItem()
+        self._lst_sub.clear()
+        if not item:
+            self._lbl_sub.setText("Selecione uma categoria à esquerda")
+            return
+        self._lbl_sub.setText(f"Sub-categorias de: {item.text()}")
+        cid = item.data(Qt.UserRole)
+        for sid, nome in listar_subcategorias(cid):
+            sub_item = QListWidgetItem(nome)
+            sub_item.setData(Qt.UserRole, sid)
+            self._lst_sub.addItem(sub_item)
+
+    def _recarregar_transacoes(self):
+        self._lst_tran.clear()
+        for tid, nome in listar_transacoes():
+            item = QListWidgetItem(nome)
+            item.setData(Qt.UserRole, tid)
+            self._lst_tran.addItem(item)
+
+    def _on_categoria_selecionada(self, *_):
+        self._recarregar_subcategorias()
+
+    def _avisar_form(self):
+        """Atualiza a aba Dados (combos e tabela) após qualquer alteração de cadastro."""
+        self._aba_form.refresh()
+
+    # ── Categorias ─────────────────────────────────────────
+    def _add_categoria(self):
+        nome, ok = QInputDialog.getText(self, "Nova Categoria", "Nome da categoria:")
+        if not ok or not nome.strip():
+            return
+        ok, msg = inserir_categoria(nome)
+        if not ok:
+            QMessageBox.warning(self, "Atenção", msg)
+            return
+        self._recarregar_categorias()
+        self._avisar_form()
+
+    def _ren_categoria(self):
+        item = self._lst_cat.currentItem()
+        if not item:
+            QMessageBox.information(self, "Info", "Selecione uma categoria.")
+            return
+        novo, ok = QInputDialog.getText(self, "Renomear Categoria", "Novo nome:",
+                                         text=item.text())
+        if not ok or not novo.strip():
+            return
+        ok, msg = renomear_categoria(item.data(Qt.UserRole), novo)
+        if not ok:
+            QMessageBox.warning(self, "Atenção", msg)
+            return
+        self._recarregar_categorias()
+        self._avisar_form()
+
+    def _del_categoria(self):
+        item = self._lst_cat.currentItem()
+        if not item:
+            QMessageBox.information(self, "Info", "Selecione uma categoria.")
+            return
+        if QMessageBox.question(self, "Confirmar",
+                f"Excluir a categoria \"{item.text()}\"?",
+                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        ok, msg = excluir_categoria(item.data(Qt.UserRole))
+        if not ok:
+            QMessageBox.warning(self, "Não foi possível excluir", msg)
+            return
+        self._recarregar_categorias()
+        self._avisar_form()
+
+    # ── Sub-Categorias ──────────────────────────────────────
+    def _categoria_atual_id(self):
+        item = self._lst_cat.currentItem()
+        return item.data(Qt.UserRole) if item else None
+
+    def _add_subcategoria(self):
+        cid = self._categoria_atual_id()
+        if cid is None:
+            QMessageBox.information(self, "Info", "Selecione primeiro uma categoria.")
+            return
+        nome, ok = QInputDialog.getText(self, "Nova Sub-Categoria", "Nome da sub-categoria:")
+        if not ok or not nome.strip():
+            return
+        ok, msg = inserir_subcategoria(nome, cid)
+        if not ok:
+            QMessageBox.warning(self, "Atenção", msg)
+            return
+        self._recarregar_subcategorias()
+        self._avisar_form()
+
+    def _ren_subcategoria(self):
+        item = self._lst_sub.currentItem()
+        if not item:
+            QMessageBox.information(self, "Info", "Selecione uma sub-categoria.")
+            return
+        novo, ok = QInputDialog.getText(self, "Renomear Sub-Categoria", "Novo nome:",
+                                         text=item.text())
+        if not ok or not novo.strip():
+            return
+        ok, msg = renomear_subcategoria(item.data(Qt.UserRole), novo)
+        if not ok:
+            QMessageBox.warning(self, "Atenção", msg)
+            return
+        self._recarregar_subcategorias()
+        self._avisar_form()
+
+    def _del_subcategoria(self):
+        item = self._lst_sub.currentItem()
+        if not item:
+            QMessageBox.information(self, "Info", "Selecione uma sub-categoria.")
+            return
+        if QMessageBox.question(self, "Confirmar",
+                f"Excluir a sub-categoria \"{item.text()}\"?",
+                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        ok, msg = excluir_subcategoria(item.data(Qt.UserRole))
+        if not ok:
+            QMessageBox.warning(self, "Não foi possível excluir", msg)
+            return
+        self._recarregar_subcategorias()
+        self._avisar_form()
+
+    # ── Transações ───────────────────────────────────────────
+    def _add_transacao(self):
+        nome, ok = QInputDialog.getText(self, "Nova Transação", "Nome da transação:")
+        if not ok or not nome.strip():
+            return
+        ok, msg = inserir_transacao(nome)
+        if not ok:
+            QMessageBox.warning(self, "Atenção", msg)
+            return
+        self._recarregar_transacoes()
+        self._avisar_form()
+
+    def _ren_transacao(self):
+        item = self._lst_tran.currentItem()
+        if not item:
+            QMessageBox.information(self, "Info", "Selecione uma transação.")
+            return
+        novo, ok = QInputDialog.getText(self, "Renomear Transação", "Novo nome:",
+                                         text=item.text())
+        if not ok or not novo.strip():
+            return
+        ok, msg = renomear_transacao(item.data(Qt.UserRole), novo)
+        if not ok:
+            QMessageBox.warning(self, "Atenção", msg)
+            return
+        self._recarregar_transacoes()
+        self._avisar_form()
+
+    def _del_transacao(self):
+        item = self._lst_tran.currentItem()
+        if not item:
+            QMessageBox.information(self, "Info", "Selecione uma transação.")
+            return
+        if QMessageBox.question(self, "Confirmar",
+                f"Excluir a transação \"{item.text()}\"?",
+                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        ok, msg = excluir_transacao(item.data(Qt.UserRole))
+        if not ok:
+            QMessageBox.warning(self, "Não foi possível excluir", msg)
+            return
+        self._recarregar_transacoes()
+        self._avisar_form()
 
 
 # ═══════════════════════════════════════════════════════════
@@ -2183,15 +2702,17 @@ class MainWindow(QMainWindow):
         tabs.setDocumentMode(True)
         tabs.setFont(QFont("Segoe UI", 10))
 
-        self._aba_form   = AbaForm()
-        self._aba_import = AbaImport(self._aba_form)
-        self._aba_pivot  = AbaPivot()
-        self._aba_dash   = AbaDashboard()
+        self._aba_form       = AbaForm()
+        self._aba_import     = AbaImport(self._aba_form)
+        self._aba_categorias = AbaCategorias(self._aba_form)
+        self._aba_pivot      = AbaPivot()
+        self._aba_dash       = AbaDashboard()
 
-        tabs.addTab(self._aba_form,   "  Dados  ")
-        tabs.addTab(self._aba_import, "  Importar  ")
-        tabs.addTab(self._aba_pivot,  "  Tabela Dinâmica  ")
-        tabs.addTab(self._aba_dash,   "  Dashboard  ")
+        tabs.addTab(self._aba_form,       "  Dados  ")
+        tabs.addTab(self._aba_import,     "  Importar  ")
+        tabs.addTab(self._aba_categorias, "  Categorias  ")
+        tabs.addTab(self._aba_pivot,      "  Tabela Dinâmica  ")
+        tabs.addTab(self._aba_dash,       "  Dashboard  ")
         tabs.currentChanged.connect(self._on_tab)
 
         self.setCentralWidget(tabs)
@@ -2211,9 +2732,9 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def _on_tab(self, idx):
-        if idx == 2:
-            self._aba_pivot._gerar()
         if idx == 3:
+            self._aba_pivot._gerar()
+        if idx == 4:
             self._aba_dash.atualizar()
 
 

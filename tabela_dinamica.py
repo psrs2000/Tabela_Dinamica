@@ -451,6 +451,62 @@ def apagar_banco():
     con.close()
 
 
+class _ResolvedorCadastros:
+    """Resolve Categoria/Sub-Categoria/Transação durante a importação:
+    se já existir um cadastro com a mesma grafia (ignorando maiúsculas/minúsculas
+    e acentuação via casefold), reaproveita a grafia já cadastrada; caso contrário,
+    cria um novo cadastro com o texto exatamente como veio na importação."""
+
+    def __init__(self, con):
+        self.con = con
+        self._cat_cf = {}      # casefold(nome) -> (id, nome canônico)
+        self._sub_cf = {}      # (categoria_id, casefold(nome)) -> nome canônico
+        self._tran_cf = {}     # casefold(nome) -> nome canônico
+        for cid, nome in con.execute("SELECT id, nome FROM categorias"):
+            self._cat_cf[nome.casefold()] = (cid, nome)
+        for nome, cid in con.execute("SELECT nome, categoria_id FROM subcategorias"):
+            self._sub_cf[(cid, nome.casefold())] = nome
+        for (nome,) in con.execute("SELECT nome FROM transacoes"):
+            self._tran_cf[nome.casefold()] = nome
+
+    def categoria(self, nome: str):
+        nome = nome.strip()
+        if not nome:
+            return "", None
+        key = nome.casefold()
+        if key in self._cat_cf:
+            cid, canonico = self._cat_cf[key]
+            return canonico, cid
+        cur = self.con.execute("INSERT INTO categorias (nome) VALUES (?)", (nome,))
+        cid = cur.lastrowid
+        self._cat_cf[key] = (cid, nome)
+        return nome, cid
+
+    def subcategoria(self, nome: str, categoria_id):
+        nome = nome.strip()
+        if not nome or categoria_id is None:
+            return nome
+        key = (categoria_id, nome.casefold())
+        if key in self._sub_cf:
+            return self._sub_cf[key]
+        self.con.execute(
+            "INSERT INTO subcategorias (nome, categoria_id) VALUES (?,?)",
+            (nome, categoria_id))
+        self._sub_cf[key] = nome
+        return nome
+
+    def transacao(self, nome: str):
+        nome = nome.strip()
+        if not nome:
+            return ""
+        key = nome.casefold()
+        if key in self._tran_cf:
+            return self._tran_cf[key]
+        self.con.execute("INSERT INTO transacoes (nome) VALUES (?)", (nome,))
+        self._tran_cf[key] = nome
+        return nome
+
+
 def importar_df(df, modo: str):
     col_map = {c.lower().strip(): c for c in df.columns}
 
@@ -476,6 +532,7 @@ def importar_df(df, modo: str):
     col_valor = get("valor")
 
     con = sqlite3.connect(DB_PATH)
+    resolvedor = _ResolvedorCadastros(con)
     for _, r in df.iterrows():
         data_val = str(r[col_data]).strip() if col_data else ""
         mes, ano = _mes_ano(data_val)
@@ -486,13 +543,22 @@ def importar_df(df, modo: str):
                 valor = 0.0
         else:
             valor = 0.0
+
+        cat_raw  = str(r[col_cat]).strip()  if col_cat  else ""
+        sub_raw  = str(r[col_sub]).strip()  if col_sub  else ""
+        tran_raw = str(r[col_tran]).strip() if col_tran else ""
+
+        cat_final, cat_id = resolvedor.categoria(cat_raw)
+        sub_final = resolvedor.subcategoria(sub_raw, cat_id)
+        tran_final = resolvedor.transacao(tran_raw)
+
         con.execute(
             "INSERT INTO registros (Data,Mes,Ano,Categoria,Sub_Categoria,Transacao,Descricao,Valor)"
             " VALUES (?,?,?,?,?,?,?,?)",
             (data_val, mes, ano,
-             str(r[col_cat])  if col_cat  else "",
-             str(r[col_sub])  if col_sub  else "",
-             str(r[col_tran]) if col_tran else "",
+             cat_final,
+             sub_final,
+             tran_final,
              str(r[col_desc]) if col_desc else "",
              valor)
         )

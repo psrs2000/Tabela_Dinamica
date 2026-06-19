@@ -127,7 +127,10 @@ def _parse_data(data_str: str):
 
 
 def _parse_valor(raw) -> float:
+    """Converte texto em número, aceitando tanto ',' quanto '.' como separador decimal."""
     s = re.sub(r"[R$\s]", "", str(raw).strip())
+    if not s:
+        return 0.0
     if "," in s and "." in s:
         if s.rindex(",") > s.rindex("."):
             s = s.replace(".", "").replace(",", ".")
@@ -135,10 +138,7 @@ def _parse_valor(raw) -> float:
             s = s.replace(",", "")
     else:
         s = s.replace(",", ".")
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
+    return float(s)
 
 
 def inserir(row: dict):
@@ -148,7 +148,7 @@ def inserir(row: dict):
         "INSERT INTO registros (Data,Mes,Ano,Categoria,Sub_Categoria,Transacao,Descricao,Valor)"
         " VALUES (?,?,?,?,?,?,?,?)",
         (row["Data"], mes, ano, row["Categoria"], row["Sub_Categoria"],
-         row["Transacao"], row["Descricao"], float(row["Valor"] or 0))
+         row["Transacao"], row["Descricao"], _parse_valor(row["Valor"]) if row["Valor"] else 0.0)
     )
     new_id = cur.lastrowid
     con.commit()
@@ -163,7 +163,7 @@ def atualizar(rid, row: dict):
         "UPDATE registros SET Data=?,Mes=?,Ano=?,Categoria=?,Sub_Categoria=?,"
         "Transacao=?,Descricao=?,Valor=? WHERE id=?",
         (row["Data"], mes, ano, row["Categoria"], row["Sub_Categoria"],
-         row["Transacao"], row["Descricao"], float(row["Valor"] or 0), rid)
+         row["Transacao"], row["Descricao"], _parse_valor(row["Valor"]) if row["Valor"] else 0.0, rid)
     )
     con.commit()
     con.close()
@@ -246,7 +246,13 @@ def importar_df(df, modo: str):
     for _, r in df.iterrows():
         data_val = str(r[col_data]).strip() if col_data else ""
         mes, ano = _mes_ano(data_val)
-        valor    = _parse_valor(r[col_valor]) if col_valor else 0.0
+        if col_valor:
+            try:
+                valor = _parse_valor(r[col_valor])
+            except ValueError:
+                valor = 0.0
+        else:
+            valor = 0.0
         con.execute(
             "INSERT INTO registros (Data,Mes,Ano,Categoria,Sub_Categoria,Transacao,Descricao,Valor)"
             " VALUES (?,?,?,?,?,?,?,?)",
@@ -547,10 +553,11 @@ class AbaForm(QWidget):
                 "Formato de data inválido.\nUse dd/mm/aaaa ou dd/mm/aaaa hh:mm:ss")
             return
         try:
-            valor = float(row["Valor"] or 0)
+            valor = _parse_valor(row["Valor"]) if row["Valor"] else 0.0
         except ValueError:
             QMessageBox.warning(self, "Atenção", "Valor deve ser numérico.")
             return
+        row["Valor"] = valor
         edit_id = self._edit_id
         if edit_id:
             atualizar(edit_id, row)
@@ -746,7 +753,7 @@ class AbaForm(QWidget):
                 row[campo] = self._get_text(campo)
             mes, ano = _mes_ano(row["Data"])
             try:
-                valor = float(row["Valor"] or 0)
+                valor = _parse_valor(row["Valor"]) if row["Valor"] else 0.0
             except ValueError:
                 valor = 0.0
             con.execute(

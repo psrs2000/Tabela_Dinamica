@@ -2825,7 +2825,7 @@ class AbaEvolucao(QWidget):
         row.setSpacing(14)
 
         # painel esquerdo: Categoria / Sub-Categoria (múltipla seleção)
-        grp_dim = QGroupBox("Evolução por Categoria / Sub-Categoria")
+        grp_dim = QGroupBox("Evolução Acumulada por Categoria / Sub-Categoria")
         lay_dim = QVBoxLayout(grp_dim)
         lay_dim.setSpacing(6)
 
@@ -2864,7 +2864,7 @@ class AbaEvolucao(QWidget):
         row.addWidget(grp_dim, 1)
 
         # painel direito: Saldo (fixo)
-        grp_sal = QGroupBox("Evolução do Saldo")
+        grp_sal = QGroupBox("Evolução do Saldo Acumulado")
         lay_sal = QVBoxLayout(grp_sal)
         if MATPLOTLIB_OK:
             self._fig_sal = Figure(figsize=(4, 3))
@@ -3000,7 +3000,7 @@ class AbaEvolucao(QWidget):
             d["_key"] = d["Ano"].astype(int) * 100 + d["Mes"].astype(int)
         else:
             d["_key"] = d["Ano"].astype(int)
-        grp = d.groupby("_key")["Valor"].sum().sort_index()
+        grp = d.groupby("_key")["Valor"].sum().sort_index().cumsum()
         labels = []
         for k in grp.index:
             if gran == "Mês":
@@ -3071,7 +3071,7 @@ class AbaEvolucao(QWidget):
         serie = self._agrupar_periodo(df_filtrado, gran)
         if not serie.empty:
             ax.plot(serie.index, serie.values, marker="o", color="#1565C0",
-                     linewidth=1.8, label="Saldo")
+                     linewidth=1.8, label="Saldo acumulado")
             ax.axhline(0, color="#999999", linewidth=0.8)
             self._lbl_tend_sal.setText(self._desenhar_tendencia(ax, serie))
             ax.legend(fontsize=8, loc="best")

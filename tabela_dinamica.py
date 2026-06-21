@@ -15,8 +15,10 @@ try:
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
     MATPLOTLIB_OK = True
-except ImportError:
+    MATPLOTLIB_ERRO = ""
+except Exception as _e:
     MATPLOTLIB_OK = False
+    MATPLOTLIB_ERRO = f"{type(_e).__name__}: {_e}"
 
 try:
     import openpyxl
@@ -2854,7 +2856,10 @@ class AbaEvolucao(QWidget):
             self._canvas_dim = FigureCanvas(self._fig_dim)
             body_dim.addWidget(self._canvas_dim, 1)
         else:
-            body_dim.addWidget(QLabel("Biblioteca matplotlib não instalada."), 1)
+            lbl_erro = QLabel(f"Gráficos indisponíveis.\n\n{MATPLOTLIB_ERRO}")
+            lbl_erro.setWordWrap(True)
+            lbl_erro.setStyleSheet("color:#c62828;")
+            body_dim.addWidget(lbl_erro, 1)
         lay_dim.addLayout(body_dim, 1)
 
         self._lbl_tend_dim = QLabel("")
@@ -2871,7 +2876,10 @@ class AbaEvolucao(QWidget):
             self._canvas_sal = FigureCanvas(self._fig_sal)
             lay_sal.addWidget(self._canvas_sal, 1)
         else:
-            lay_sal.addWidget(QLabel("Biblioteca matplotlib não instalada."), 1)
+            lbl_erro2 = QLabel(f"Gráficos indisponíveis.\n\n{MATPLOTLIB_ERRO}")
+            lbl_erro2.setWordWrap(True)
+            lbl_erro2.setStyleSheet("color:#c62828;")
+            lay_sal.addWidget(lbl_erro2, 1)
 
         self._lbl_tend_sal = QLabel("")
         self._lbl_tend_sal.setWordWrap(True)
@@ -3092,8 +3100,13 @@ class AbaEvolucao(QWidget):
             df = df[(df["_DataDT"].dt.date >= de) & (df["_DataDT"].dt.date <= ate)]
 
         gran = self._cb_gran.currentText()
-        self._plot_dim(df, gran)
-        self._plot_saldo(df, gran)
+        try:
+            self._plot_dim(df, gran)
+            self._plot_saldo(df, gran)
+        except Exception as e:
+            erro = f"Erro ao desenhar o gráfico:\n{type(e).__name__}: {e}"
+            self._lbl_tend_dim.setText(erro)
+            self._lbl_tend_sal.setText(erro)
 
 
 class MainWindow(QMainWindow):

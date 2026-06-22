@@ -3,6 +3,8 @@ import os
 import sqlite3
 import datetime
 import re
+import hashlib
+import shutil
 
 try:
     import pandas as pd
@@ -25,7 +27,7 @@ from PyQt5.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QHeaderView, QSplitter,
     QAbstractItemView, QStatusBar, QFrame,
     QMenu, QWidgetAction, QDateEdit, QListWidget, QListWidgetItem,
-    QInputDialog,
+    QInputDialog, QDialog, QDialogButtonBox,
 )
 from PyQt5.QtCore import Qt, QSize, QSortFilterProxyModel, QDate
 from PyQt5.QtGui import QColor, QBrush, QFont, QPalette
@@ -71,6 +73,74 @@ COLOR_ZERO  = QColor("#424242")   # cinza
 BG_GRUPO    = QColor("#dce8f5")   # azul claro
 BG_TOTAL    = QColor("#c8e6c9")   # verde claro
 BG_ALT      = QColor("#f9f9f9")   # alternado
+
+PALETA_CLARA = None   # capturada em tempo de execução, antes de aplicar temas
+
+
+def _paleta_escura() -> QPalette:
+    pal = QPalette()
+    pal.setColor(QPalette.Window,          QColor(53, 53, 53))
+    pal.setColor(QPalette.WindowText,      Qt.white)
+    pal.setColor(QPalette.Base,            QColor(35, 35, 35))
+    pal.setColor(QPalette.AlternateBase,   QColor(53, 53, 53))
+    pal.setColor(QPalette.ToolTipBase,     Qt.white)
+    pal.setColor(QPalette.ToolTipText,     Qt.white)
+    pal.setColor(QPalette.Text,            Qt.white)
+    pal.setColor(QPalette.Button,          QColor(53, 53, 53))
+    pal.setColor(QPalette.ButtonText,      Qt.white)
+    pal.setColor(QPalette.BrightText,      Qt.red)
+    pal.setColor(QPalette.Link,            QColor(42, 130, 218))
+    pal.setColor(QPalette.Highlight,       QColor(42, 130, 218))
+    pal.setColor(QPalette.HighlightedText, Qt.black)
+    return pal
+
+
+# ═══════════════════════════════════════════════════════════
+#  AUTENTICAÇÃO (senha de acesso ao programa)
+# ═══════════════════════════════════════════════════════════
+
+def _hash_senha(senha: str, salt: str) -> str:
+    return hashlib.sha256((salt + senha).encode("utf-8")).hexdigest()
+
+
+class LoginDialog(QDialog):
+    def __init__(self, erro=""):
+        super().__init__()
+        self.setWindowTitle("Acesso ao Programa")
+        self.setModal(True)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("Digite a senha para continuar:"))
+        self._ed = QLineEdit()
+        self._ed.setEchoMode(QLineEdit.Password)
+        self._ed.returnPressed.connect(self.accept)
+        lay.addWidget(self._ed)
+        self._lbl_erro = QLabel(erro)
+        self._lbl_erro.setStyleSheet("color:#c62828;")
+        lay.addWidget(self._lbl_erro)
+        botoes = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        botoes.accepted.connect(self.accept)
+        botoes.rejected.connect(self.reject)
+        lay.addWidget(botoes)
+        self._ed.setFocus()
+
+    def senha(self) -> str:
+        return self._ed.text()
+
+
+def _verificar_login() -> bool:
+    """Retorna True se o acesso é permitido (sem senha configurada ou senha correta)."""
+    cfg = cfg_load()
+    auth = cfg.get("auth")
+    if not auth:
+        return True
+    erro = ""
+    while True:
+        dlg = LoginDialog(erro)
+        if dlg.exec_() != QDialog.Accepted:
+            return False
+        if _hash_senha(dlg.senha(), auth.get("salt", "")) == auth.get("hash", ""):
+            return True
+        erro = "Senha incorreta. Tente novamente."
 
 
 # ═══════════════════════════════════════════════════════════
@@ -3072,6 +3142,165 @@ class AbaTendencias(QWidget):
             self._atualizar_card_painel(painel, df, n_periodos)
 
 
+# ═══════════════════════════════════════════════════════════
+#  ABA CONFIGURAÇÕES
+# ═══════════════════════════════════════════════════════════
+
+class AbaConfiguracoes(QWidget):
+
+    def __init__(self, on_db_trocado=None):
+        super().__init__()
+        self._on_db_trocado = on_db_trocado
+        self._build()
+
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 16, 20, 16)
+        root.setSpacing(18)
+
+        # ── Banco de dados ─────────────────────────────────
+        grp_db = QGroupBox("Banco de Dados")
+        lay_db = QHBoxLayout(grp_db)
+        self._ed_db_path = QLineEdit(DB_PATH)
+        self._ed_db_path.setReadOnly(True)
+        lay_db.addWidget(self._ed_db_path, 1)
+        lay_db.addWidget(_btn("Procurar...", "#1565C0", self._procurar_banco, 110))
+        root.addWidget(grp_db)
+
+        # ── Senha de acesso ─────────────────────────────────
+        grp_senha = QGroupBox("Senha de Acesso ao Programa")
+        lay_senha = QFormLayout(grp_senha)
+        self._ed_senha1 = QLineEdit(); self._ed_senha1.setEchoMode(QLineEdit.Password)
+        self._ed_senha2 = QLineEdit(); self._ed_senha2.setEchoMode(QLineEdit.Password)
+        lay_senha.addRow("Nova senha:", self._ed_senha1)
+        lay_senha.addRow("Confirmar senha:", self._ed_senha2)
+        botoes_senha = QHBoxLayout()
+        botoes_senha.addWidget(_btn("Definir senha", "#1b5e20", self._definir_senha, 130))
+        botoes_senha.addWidget(_btn("Remover senha", "#c62828", self._remover_senha, 130))
+        botoes_senha.addStretch()
+        lay_senha.addRow("", botoes_senha)
+        self._lbl_status_senha = QLabel()
+        lay_senha.addRow("", self._lbl_status_senha)
+        root.addWidget(grp_senha)
+        self._atualizar_status_senha()
+
+        # ── Tema visual ──────────────────────────────────────
+        grp_tema = QGroupBox("Tema Visual")
+        lay_tema = QHBoxLayout(grp_tema)
+        lay_tema.addWidget(QLabel("Tema:"))
+        self._cb_tema = QComboBox()
+        self._cb_tema.addItems(["Claro", "Escuro"])
+        cfg_tema = cfg_load().get("tema", "Claro")
+        self._cb_tema.setCurrentText(cfg_tema if cfg_tema in ("Claro", "Escuro") else "Claro")
+        self._cb_tema.currentTextChanged.connect(self._mudar_tema)
+        lay_tema.addWidget(self._cb_tema)
+        lay_tema.addStretch()
+        root.addWidget(grp_tema)
+
+        # ── Backup ───────────────────────────────────────────
+        grp_backup = QGroupBox("Backup")
+        lay_backup = QHBoxLayout(grp_backup)
+        lay_backup.addWidget(QLabel("Salva uma cópia completa do banco de dados atual."))
+        lay_backup.addStretch()
+        lay_backup.addWidget(_btn("Fazer backup...", "#6A1B9A", self._fazer_backup, 140))
+        root.addWidget(grp_backup)
+
+        root.addStretch()
+
+    # ── banco de dados ────────────────────────────────────
+    def _procurar_banco(self):
+        global DB_PATH
+        caminho, _ = QFileDialog.getOpenFileName(
+            self, "Selecionar banco de dados", os.path.dirname(DB_PATH),
+            "Banco de dados (*.db);;Todos os arquivos (*)")
+        if not caminho:
+            return
+        resp = QMessageBox.question(
+            self, "Trocar banco de dados",
+            f"Trocar para o banco:\n{caminho}\n\n"
+            "O programa vai recarregar todos os dados. Continuar?",
+            QMessageBox.Yes | QMessageBox.No)
+        if resp != QMessageBox.Yes:
+            return
+        DB_PATH = caminho
+        cfg_save({"db_path": caminho})
+        init_db()
+        self._ed_db_path.setText(DB_PATH)
+        if self._on_db_trocado:
+            self._on_db_trocado()
+        QMessageBox.information(self, "Banco de dados", "Banco de dados trocado com sucesso.")
+
+    # ── senha de acesso ────────────────────────────────────
+    def _atualizar_status_senha(self):
+        if cfg_load().get("auth"):
+            self._lbl_status_senha.setText("Senha de acesso está ATIVA.")
+            self._lbl_status_senha.setStyleSheet("color:#1b5e20; font-weight:bold;")
+        else:
+            self._lbl_status_senha.setText("Nenhuma senha configurada (acesso livre).")
+            self._lbl_status_senha.setStyleSheet("color:#888;")
+
+    def _definir_senha(self):
+        s1 = self._ed_senha1.text()
+        s2 = self._ed_senha2.text()
+        if not s1:
+            QMessageBox.warning(self, "Senha", "Digite a nova senha.")
+            return
+        if s1 != s2:
+            QMessageBox.warning(self, "Senha", "As senhas não coincidem.")
+            return
+        if len(s1) < 4:
+            QMessageBox.warning(self, "Senha", "A senha deve ter ao menos 4 caracteres.")
+            return
+        salt = os.urandom(16).hex()
+        cfg_save({"auth": {"salt": salt, "hash": _hash_senha(s1, salt)}})
+        self._ed_senha1.clear(); self._ed_senha2.clear()
+        self._atualizar_status_senha()
+        QMessageBox.information(
+            self, "Senha",
+            "Senha definida com sucesso. Será exigida na próxima abertura do programa.")
+
+    def _remover_senha(self):
+        cfg = cfg_load()
+        if not cfg.get("auth"):
+            QMessageBox.information(self, "Senha", "Não há senha configurada.")
+            return
+        resp = QMessageBox.question(self, "Remover senha", "Remover a senha de acesso?",
+                                      QMessageBox.Yes | QMessageBox.No)
+        if resp != QMessageBox.Yes:
+            return
+        cfg.pop("auth", None)
+        import json
+        with open(CFG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+        self._atualizar_status_senha()
+        QMessageBox.information(self, "Senha", "Senha removida.")
+
+    # ── tema visual ────────────────────────────────────────
+    def _mudar_tema(self, nome):
+        cfg_save({"tema": nome})
+        app = QApplication.instance()
+        if not app:
+            return
+        if nome == "Escuro":
+            app.setPalette(_paleta_escura())
+        elif PALETA_CLARA is not None:
+            app.setPalette(PALETA_CLARA)
+
+    # ── backup ─────────────────────────────────────────────
+    def _fazer_backup(self):
+        sugestao = f"backup_dados_{datetime.datetime.now():%Y%m%d_%H%M%S}.db"
+        destino, _ = QFileDialog.getSaveFileName(
+            self, "Salvar backup", os.path.join(os.path.dirname(DB_PATH), sugestao),
+            "Banco de dados (*.db)")
+        if not destino:
+            return
+        try:
+            shutil.copy2(DB_PATH, destino)
+            QMessageBox.information(self, "Backup", f"Backup salvo em:\n{destino}")
+        except Exception as e:
+            QMessageBox.critical(self, "Backup", f"Erro ao salvar backup:\n{e}")
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -3098,6 +3327,7 @@ class MainWindow(QMainWindow):
         self._aba_pivot      = AbaPivot()
         self._aba_dash       = AbaDashboard()
         self._aba_tendencias = AbaTendencias()
+        self._aba_config     = AbaConfiguracoes(on_db_trocado=self._refresh_tudo)
 
         tabs.addTab(self._aba_form,       "  Dados  ")
         tabs.addTab(self._aba_import,     "  Importar  ")
@@ -3105,6 +3335,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._aba_pivot,      "  Tabela Dinâmica  ")
         tabs.addTab(self._aba_dash,       "  Dashboard  ")
         tabs.addTab(self._aba_tendencias, "  Tendências  ")
+        tabs.addTab(self._aba_config,     "  Configurações  ")
         tabs.currentChanged.connect(self._on_tab)
 
         self.setCentralWidget(tabs)
@@ -3133,13 +3364,33 @@ class MainWindow(QMainWindow):
         if idx == 5:
             self._aba_tendencias.atualizar()
 
+    def _refresh_tudo(self):
+        """Recarrega todas as abas após troca de banco de dados."""
+        self._aba_form._carregar()
+        self._aba_categorias.recarregar()
+        self._aba_pivot._gerar()
+        self._aba_dash.atualizar()
+        self._aba_tendencias.atualizar()
+
 
 # ═══════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    _cfg_inicial = cfg_load()
+    _db_salvo = _cfg_inicial.get("db_path")
+    if _db_salvo and os.path.isfile(_db_salvo):
+        DB_PATH = _db_salvo
     init_db()
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    PALETA_CLARA = QPalette(app.palette())
+    if _cfg_inicial.get("tema") == "Escuro":
+        app.setPalette(_paleta_escura())
+
+    if not _verificar_login():
+        sys.exit(0)
+
     win = MainWindow()
     win.show()
     sys.exit(app.exec_())

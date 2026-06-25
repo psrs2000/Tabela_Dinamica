@@ -1,0 +1,12 @@
+# Dados locais e configuração do usuário
+config.json
+dados.db
+
+# Python
+__pycache__/
+*.pyc
+
+# Build PyInstaller
+build/
+dist/
+*.spec

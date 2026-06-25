@@ -26,7 +26,7 @@ Programa de controle financeiro pessoal (ou de pequenos negócios), em PyQt5, co
 
 ## 1. O que é este programa e para quem ele serve
 
-O **Tabela Dinâmica** é um programa de controle financeiro pessoal (ou de pequenos negócios) que funciona como um "Excel especializado": você lança suas entradas e saídas de dinheiro, e o programa cruza esses dados de todas as formas possíveis — por categoria, por mês, por ano, por tipo de transação — automaticamente, sem você precisar escrever nenhuma fórmula.
+O **Fluxo de Caixa** é um programa de controle financeiro pessoal (ou de pequenos negócios) que funciona como um "Excel especializado": você lança suas entradas e saídas de dinheiro, e o programa cruza esses dados de todas as formas possíveis — por categoria, por mês, por ano, por tipo de transação — automaticamente, sem você precisar escrever nenhuma fórmula.
 
 Se você já usou uma **Tabela Dinâmica** (Pivot Table) no Excel, vai se sentir em casa. Se nunca usou, não se preocupe: este manual explica tudo do zero, com exemplos práticos.
 

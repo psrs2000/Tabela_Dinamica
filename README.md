@@ -1,5 +1,4 @@
-# Tabela Dinâmica
-
+# Fluxo de Caixa
 Programa de controle financeiro pessoal (ou de pequenos negócios), em PyQt5, com o poder de uma Tabela Dinâmica do Excel — sem precisar escrever nenhuma fórmula.
 
 📄 Este README contém o manual completo do usuário. Se preferir, há também uma versão em PDF: [`Manual_Tabela_Dinamica.pdf`](Manual_Tabela_Dinamica.pdf).
